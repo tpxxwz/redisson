@@ -21,6 +21,9 @@ pub struct PublishSubscribeService {
     semaphores: Vec<Arc<Semaphore>>,
     pub(crate) entries: DashMap<String, Arc<RedissonLockEntry>>,
     pub(crate) channel_to_entries: DashMap<String, DashSet<String>>,
+    /// 对应 Java PublishSubscribeService.getPublishCommand()
+    /// standalone/sentinel 用 "publish"，cluster sharded 用 "spublish"
+    publish_command: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -32,14 +35,20 @@ pub struct PublishSubscribeStats {
 }
 
 impl PublishSubscribeService {
-    pub fn new(subscriber: SubscriberClient) -> Self {
+    pub fn new(subscriber: SubscriberClient, publish_command: &'static str) -> Self {
         let semaphores = (0..50).map(|_| Arc::new(Semaphore::new(1))).collect();
         Self {
             subscriber,
             semaphores,
             entries: DashMap::new(),
             channel_to_entries: DashMap::new(),
+            publish_command,
         }
+    }
+
+    /// 对应 Java PublishSubscribeService.getPublishCommand()
+    pub fn publish_command(&self) -> &'static str {
+        self.publish_command
     }
 
     pub async fn subscribe(

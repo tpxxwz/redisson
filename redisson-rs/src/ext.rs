@@ -1,5 +1,6 @@
 use crate::redisson::Redisson;
 use anyhow::Result;
+use fred::prelude::Expiration;
 use std::sync::Arc;
 
 // ============================================================
@@ -49,8 +50,8 @@ impl RedisExt for Arc<Redisson> {
         T: serde::de::DeserializeOwned + Send,
         K: RedisKey + Send,
     {
-        let result = self.command_executor().get_str(&key.key()).await?;
-        match result {
+        let raw = self.command_executor().get_str(&key.key()).await?;
+        match raw {
             Some(json) if !json.is_empty() => Ok(Some(serde_json::from_str(&json)?)),
             _ => Ok(None),
         }
@@ -62,8 +63,9 @@ impl RedisExt for Arc<Redisson> {
         K: RedisKey + Send,
     {
         let json = serde_json::to_string(value)?;
+        let expire = expire_secs.filter(|&s| s > 0).map(Expiration::EX);
         self.command_executor()
-            .set_str(&key.key(), &json, expire_secs)
+            .set_value(&key.key(), json, expire)
             .await
     }
 }

@@ -2,8 +2,7 @@ use super::lock_entry::LockEntry;
 use super::renewal_task::RenewalTask;
 use crate::command::command_async_executor::CommandAsyncExecutor;
 use dashmap::DashMap;
-use dashmap::mapref::entry::Entry;
-use fred::types::FromValue;
+use fred::prelude::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -33,11 +32,11 @@ const RENEW_SCRIPT: &str = concat![
 
 /// 标准锁续约任务，对应 Java LockTask extends RenewalTask。
 /// 持有 name2entry（key → LockEntry）、running 标志和续约定时器逻辑。
-pub struct LockTask {
+pub struct LockTask<CE: CommandAsyncExecutor> {
     /// 对应 Java RenewalTask.internalLockLeaseTime
     internal_lock_lease_time: u64,
     /// 对应 Java RenewalTask.executor（CommandAsyncExecutor）
-    executor: Arc<dyn CommandAsyncExecutor>,
+    executor: Arc<CE>,
     /// key → LockEntry，对应 Java RenewalTask.name2entry
     pub(crate) name2entry: Arc<DashMap<String, LockEntry>>,
     /// 续约循环运行标志，对应 Java RenewalTask.running
@@ -45,8 +44,8 @@ pub struct LockTask {
     shutdown_token: CancellationToken,
 }
 
-impl LockTask {
-    pub fn new(executor: Arc<dyn CommandAsyncExecutor>, internal_lock_lease_time: u64) -> Self {
+impl<CE: CommandAsyncExecutor> LockTask<CE> {
+    pub fn new(executor: Arc<CE>, internal_lock_lease_time: u64) -> Self {
         Self {
             internal_lock_lease_time,
             executor,
@@ -60,7 +59,7 @@ impl LockTask {
     async fn execute(
         name2entry: &DashMap<String, LockEntry>,
         internal_lock_lease_time: u64,
-        executor: &Arc<dyn CommandAsyncExecutor>,
+        executor: &Arc<CE>,
     ) {
         if name2entry.is_empty() {
             return;
@@ -68,7 +67,11 @@ impl LockTask {
 
         let snapshot: Vec<(String, String)> = name2entry
             .iter()
-            .map(|e| (e.key().clone(), e.value().owner_id().to_string()))
+            .filter_map(|e| {
+                e.value()
+                    .get_first_lock_name()
+                    .map(|lock_name| (e.key().clone(), lock_name.to_string()))
+            })
             .collect();
 
         let ttl_str = internal_lock_lease_time.to_string();
@@ -77,8 +80,9 @@ impl LockTask {
         argv.push(ttl_str.as_str());
         argv.extend(snapshot.iter().map(|(_, o)| o.as_str()));
 
-        match executor.eval_raw(RENEW_SCRIPT, keys, argv).await {
+        match executor.eval_write_async::<Value>(RENEW_SCRIPT, keys, argv).await {
             Ok(raw) => {
+                use fred::types::FromValue;
                 let results = Vec::<i64>::from_value(raw).unwrap_or_default();
                 for (i, (key, owner_id)) in snapshot.iter().enumerate() {
                     if results.get(i).copied().unwrap_or(0) == 0 {
@@ -103,7 +107,7 @@ impl LockTask {
     /// 启动事件驱动续约循环，对应 Java RenewalTask.run(timeout) + schedule()
     fn spawn(
         name2entry: Arc<DashMap<String, LockEntry>>,
-        executor: Arc<dyn CommandAsyncExecutor>,
+        executor: Arc<CE>,
         internal_lock_lease_time: u64,
         running: Arc<AtomicBool>,
         shutdown_token: CancellationToken,
@@ -157,25 +161,28 @@ impl LockTask {
     }
 }
 
-impl RenewalTask for LockTask {
-    /// 对应 Java LockTask.add(rawName, lockName, threadId)：
-    /// putIfAbsent — 首次注册时启动续约循环，重入时 watchdog 已在运行，无需额外操作
-    fn add(&self, name: String, lock_name: String) {
-        match self.name2entry.entry(name) {
-            Entry::Occupied(_) => {
-                // watchdog 已在运行，幂等，无需操作
-            }
-            Entry::Vacant(e) => {
-                // 对应 Java: name2entry.putIfAbsent 返回 null → tryRun() + schedule()
-                e.insert(LockEntry::new(lock_name));
-                self.try_run();
-            }
+impl<CE: CommandAsyncExecutor> RenewalTask for LockTask<CE> {
+    /// 对应 Java LockTask.add(rawName, lockName, threadId)
+    fn add(&self, name: String, lock_name: String, thread_id: String) {
+        let mut entry = self.name2entry.entry(name).or_insert_with(LockEntry::new);
+        let is_first = entry.has_no_threads();
+        entry.add_thread_id(thread_id, lock_name);
+        if is_first {
+            self.try_run();
         }
     }
 
-    /// 对应 Java RenewalTask.cancelExpirationRenewal(name, threadId)：
-    /// Rust 只在锁完全释放时调用一次，直接从 map 移除
-    fn cancel_expiration_renewal(&self, name: &str) {
+    /// 对应 Java RenewalTask.cancelExpirationRenewal(name, threadId)
+    fn cancel_expiration_renewal(&self, name: &str, thread_id: Option<&str>) {
+        if let Some(tid) = thread_id {
+            // 移除指定 thread，只有所有 thread 都退出后才移除 entry
+            if let Some(mut entry) = self.name2entry.get_mut(name) {
+                entry.remove_thread_id(tid);
+                if !entry.has_no_threads() {
+                    return;
+                }
+            }
+        }
         self.name2entry.remove(name);
         if self.name2entry.is_empty() {
             self.running.store(false, Ordering::Release);

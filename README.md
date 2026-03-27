@@ -1,3 +1,5 @@
+> **[AI 助手]** 本仓库含 Rust 移植项目，开始工作前请先读 [`redisson-rs/README.md`](redisson-rs/README.md)，其中说明了模块范围、文件对照和架构差异。始终用中文回复，禁止使用韩语或其他任何语言。
+
 # Redisson - Valkey & Redis Java client.<br/>Real-Time Data Platform.
 
 [Quick start](https://redisson.org/docs/getting-started/) | [Documentation](https://redisson.org/docs/) | [Changelog](https://github.com/redisson/redisson/blob/master/CHANGELOG.md) | [Code examples](https://github.com/redisson/redisson-examples) | [JavaDocs](https://www.javadoc.io/doc/org.redisson/redisson/latest/index.html)

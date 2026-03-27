@@ -1,24 +1,21 @@
 use super::command_async_executor::CommandAsyncExecutor;
+use crate::command::redis_command::RedisCommand;
 use crate::connection::connection_manager::ConnectionManager;
 use crate::connection::fred_connection_manager::FredConnectionManager;
 use crate::connection::service_manager::ServiceManager;
-use crate::pubsub::publish_subscribe_service::PublishSubscribeService;
 use anyhow::Result;
-use async_trait::async_trait;
-use fred::interfaces::{HashesInterface, KeysInterface, LuaInterface};
-use fred::prelude::Expiration;
-use fred::types::{FromValue, Value};
+use fred::interfaces::{ClientLike, KeysInterface, LuaInterface};
+use fred::prelude::{Expiration, Pool};
+use fred::types::{ClusterHash, CustomCommand, FromValue};
+use std::future::Future;
 use std::sync::Arc;
 
 // ============================================================
 // CommandAsyncService — 对应 Java org.redisson.command.CommandAsyncService
 // ============================================================
 
-/// 命令执行器，持有 ConnectionManager 并负责向 Redis 发送命令。
-/// 对应 Java CommandAsyncService（CommandAsyncExecutor 接口的主要实现）。
-/// 所有 Redis 操作都经由此类路由，而非直接持有 Pool 引用。
 pub struct CommandAsyncService {
-    connection_manager: Arc<FredConnectionManager>,
+    pub(crate) connection_manager: Arc<FredConnectionManager>,
 }
 
 impl CommandAsyncService {
@@ -26,21 +23,27 @@ impl CommandAsyncService {
         Self { connection_manager }
     }
 
-    /// 执行 Lua 脚本，泛型版本供内部或具体类型场景使用
-    pub async fn eval<R>(&self, script: &str, keys: Vec<&str>, args: Vec<&str>) -> Result<R>
-    where
-        R: FromValue + Send,
-    {
-        Ok(self
-            .connection_manager
-            .pool
-            .eval(script, keys, args)
-            .await?)
+    pub(crate) fn pool(&self) -> &Pool {
+        &self.connection_manager.pool
     }
 
+    pub async fn set_value(&self, key: &str, value: String, expire: Option<Expiration>) -> Result<()> {
+        self.connection_manager
+            .pool
+            .set::<(), _, _>(key, value, expire, None, false)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_str(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.connection_manager.pool.get(key).await?)
+    }
 }
 
-#[async_trait]
+// ============================================================
+// CommandAsyncExecutor impl
+// ============================================================
+
 impl CommandAsyncExecutor for CommandAsyncService {
     fn connection_manager(&self) -> Arc<dyn ConnectionManager> {
         self.connection_manager.clone()
@@ -50,56 +53,71 @@ impl CommandAsyncExecutor for CommandAsyncService {
         self.connection_manager.service_manager()
     }
 
-    fn subscribe_service(&self) -> &Arc<PublishSubscribeService> {
-        self.connection_manager.subscribe_service()
+    fn read_async<T: FromValue + Send + 'static>(
+        &self,
+        key: &str,
+        command: RedisCommand<T>,
+        args: Vec<&str>,
+    ) -> impl Future<Output = Result<T>> + Send + 'static {
+        let pool = self.connection_manager.pool.clone();
+        let key = key.to_string();
+        let args: Vec<String> = args.into_iter().map(|s| s.to_string()).collect();
+        async move {
+            let cmd = CustomCommand::new_static(command.name, ClusterHash::FirstKey, false);
+            let mut all_args: Vec<&str> = vec![key.as_str()];
+            all_args.extend(args.iter().map(|s| s.as_str()));
+            Ok(pool.custom(cmd, all_args).await?)
+        }
     }
 
-    fn publish_command(&self) -> &'static str {
-        self.connection_manager.service_manager().publish_command()
+    fn write_async<T: FromValue + Send + 'static>(
+        &self,
+        key: &str,
+        command: RedisCommand<T>,
+        args: Vec<&str>,
+    ) -> impl Future<Output = Result<T>> + Send + 'static {
+        let pool = self.connection_manager.pool.clone();
+        let key = key.to_string();
+        let args: Vec<String> = args.into_iter().map(|s| s.to_string()).collect();
+        async move {
+            let cmd = CustomCommand::new_static(command.name, ClusterHash::FirstKey, false);
+            let mut all_args: Vec<&str> = vec![key.as_str()];
+            all_args.extend(args.iter().map(|s| s.as_str()));
+            Ok(pool.custom(cmd, all_args).await?)
+        }
     }
 
-    fn calc_unlock_latch_timeout_ms(&self) -> u64 {
-        self.connection_manager
-            .service_manager()
-            .calc_unlock_latch_timeout_ms()
+    fn eval_write_async<T: FromValue + Send + 'static>(
+        &self,
+        script: &str,
+        keys: Vec<&str>,
+        args: Vec<&str>,
+    ) -> impl Future<Output = Result<T>> + Send + 'static {
+        let pool = self.connection_manager.pool.clone();
+        let script = script.to_string();
+        let keys: Vec<String> = keys.into_iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = args.into_iter().map(|s| s.to_string()).collect();
+        async move {
+            let key_refs: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
+            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            Ok(pool.eval(script, key_refs, arg_refs).await?)
+        }
     }
 
-    async fn eval_raw(&self, script: &str, keys: Vec<&str>, args: Vec<&str>) -> Result<Value> {
-        Ok(self
-            .connection_manager
-            .pool
-            .eval(script, keys, args)
-            .await?)
-    }
-
-    async fn exists(&self, key: &str) -> Result<bool> {
-        Ok(self.connection_manager.pool.exists(key).await?)
-    }
-
-    async fn hexists(&self, key: &str, field: &str) -> Result<bool> {
-        Ok(self.connection_manager.pool.hexists(key, field).await?)
-    }
-
-    async fn pttl(&self, key: &str) -> Result<i64> {
-        Ok(self.connection_manager.pool.pttl(key).await?)
-    }
-
-    async fn del(&self, key: &str) -> Result<()> {
-        let _: i64 = self.connection_manager.pool.del(key).await?;
-        Ok(())
-    }
-
-    async fn get_str(&self, key: &str) -> Result<Option<String>> {
-        Ok(self.connection_manager.pool.get(key).await?)
-    }
-
-    async fn set_str(&self, key: &str, value: &str, expire_secs: Option<i64>) -> Result<()> {
-        let expiry = expire_secs.filter(|&s| s > 0).map(Expiration::EX);
-        let _: () = self
-            .connection_manager
-            .pool
-            .set(key, value, expiry, None, false)
-            .await?;
-        Ok(())
+    fn eval_read_async<T: FromValue + Send + 'static>(
+        &self,
+        script: &str,
+        keys: Vec<&str>,
+        args: Vec<&str>,
+    ) -> impl Future<Output = Result<T>> + Send + 'static {
+        let pool = self.connection_manager.pool.clone();
+        let script = script.to_string();
+        let keys: Vec<String> = keys.into_iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = args.into_iter().map(|s| s.to_string()).collect();
+        async move {
+            let key_refs: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
+            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            Ok(pool.eval(script, key_refs, arg_refs).await?)
+        }
     }
 }
