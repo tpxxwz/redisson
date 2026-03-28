@@ -1,4 +1,5 @@
 use crate::api::redisson_client::RedissonClient;
+use crate::api::rexpirable_async::RExpirableAsync;
 use crate::api::rlock::RLock;
 use crate::config::{RedisConfig, RedissonConfig};
 use crate::ext::RedisKey;
@@ -339,11 +340,11 @@ async fn test_lock_interruptibly_cancelled() {
 }
 
 // ============================================================
-// try_lock_with_timeout: 超时前获得锁 / 超时返回 false
+// try_lock_with_wait / try_lock_with_wait_and_lease: 超时前获得锁 / 超时返回 false
 // ============================================================
 
 #[tokio::test]
-async fn test_try_lock_with_timeout_success() {
+async fn test_try_lock_with_wait_success() {
     let rt = make_runtime().await;
 
     // task A 持锁 100ms 后释放
@@ -354,7 +355,7 @@ async fn test_try_lock_with_timeout_success() {
     let task_b = tokio::spawn(async move {
         let lock_b = rt_b.get_lock(TestKey("try_timeout_success"));
         // 500ms 内等到锁
-        lock_b.try_lock_with_timeout(500, None).await.unwrap()
+        lock_b.try_lock_with_wait(500).await.unwrap()
     });
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -366,12 +367,12 @@ async fn test_try_lock_with_timeout_success() {
         .unwrap();
     assert!(
         acquired,
-        "try_lock_with_timeout should succeed after lock release"
+        "try_lock_with_wait should succeed after lock release"
     );
 }
 
 #[tokio::test]
-async fn test_try_lock_with_timeout_expired() {
+async fn test_try_lock_with_wait_expired() {
     let rt = make_runtime().await;
 
     // task A 持锁，不释放
@@ -382,7 +383,7 @@ async fn test_try_lock_with_timeout_expired() {
     let task_b = tokio::spawn(async move {
         let lock_b = rt_b.get_lock(TestKey("try_timeout_expired"));
         // 只等 150ms，锁不会释放，应返回 false
-        lock_b.try_lock_with_timeout(150, None).await.unwrap()
+        lock_b.try_lock_with_wait(150).await.unwrap()
     });
 
     let acquired = tokio::time::timeout(Duration::from_secs(2), task_b)
@@ -391,19 +392,19 @@ async fn test_try_lock_with_timeout_expired() {
         .unwrap();
     assert!(
         !acquired,
-        "try_lock_with_timeout should return false on timeout"
+        "try_lock_with_wait should return false on timeout"
     );
 
     lock_a.unlock().await.unwrap();
 }
 
 #[tokio::test]
-async fn test_try_lock_with_timeout_fixed_lease() {
+async fn test_try_lock_with_wait_and_lease() {
     let rt = make_runtime().await;
     let lock = rt.get_lock(TestKey("try_timeout_lease"));
 
     // 用固定 lease_ms=500，拿到锁后不续约
-    let acquired = lock.try_lock_with_timeout(200, Some(500)).await.unwrap();
+    let acquired = lock.try_lock_with_wait_and_lease(200, 500).await.unwrap();
     assert!(acquired, "should acquire lock");
     assert!(lock.is_locked().await.unwrap());
 

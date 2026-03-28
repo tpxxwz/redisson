@@ -1,12 +1,13 @@
 use super::command_async_executor::CommandAsyncExecutor;
-use crate::command::redis_command::RedisCommand;
+use crate::client::protocol::redis_command::RedisCommand;
 use crate::connection::connection_manager::ConnectionManager;
 use crate::connection::fred_connection_manager::FredConnectionManager;
 use crate::connection::service_manager::ServiceManager;
 use anyhow::Result;
+use fred::error::Error;
 use fred::interfaces::{ClientLike, KeysInterface, LuaInterface};
 use fred::prelude::{Expiration, Pool};
-use fred::types::{ClusterHash, CustomCommand, FromValue};
+use fred::types::{ClusterHash, CustomCommand, FromValue, MultipleKeys, MultipleValues, Value};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -27,7 +28,12 @@ impl CommandAsyncService {
         &self.connection_manager.pool
     }
 
-    pub async fn set_value(&self, key: &str, value: String, expire: Option<Expiration>) -> Result<()> {
+    pub async fn set_value(
+        &self,
+        key: &str,
+        value: String,
+        expire: Option<Expiration>,
+    ) -> Result<()> {
         self.connection_manager
             .pool
             .set::<(), _, _>(key, value, expire, None, false)
@@ -53,71 +59,115 @@ impl CommandAsyncExecutor for CommandAsyncService {
         self.connection_manager.service_manager()
     }
 
-    fn read_async<T: FromValue + Send + 'static>(
+    fn read_async<T, K, V>(
         &self,
-        key: &str,
+        key: K,
         command: RedisCommand<T>,
-        args: Vec<&str>,
-    ) -> impl Future<Output = Result<T>> + Send + 'static {
+        args: V,
+    ) -> impl Future<Output = Result<T>> + Send + 'static
+    where
+        T: FromValue + Send + 'static,
+        K: Into<MultipleKeys> + Send,
+        V: TryInto<MultipleValues> + Send,
+        V::Error: Into<Error> + Send,
+    {
         let pool = self.connection_manager.pool.clone();
-        let key = key.to_string();
-        let args: Vec<String> = args.into_iter().map(|s| s.to_string()).collect();
+        let key_value = key.into().into_values().into_iter().next().unwrap_or(Value::Null);
+        let args_result = args.try_into().map_err(|e| anyhow::anyhow!("{:?}", e.into()));
         async move {
+            let args_vec = args_result?.into_array();
             let cmd = CustomCommand::new_static(command.name, ClusterHash::FirstKey, false);
-            let mut all_args: Vec<&str> = vec![key.as_str()];
-            all_args.extend(args.iter().map(|s| s.as_str()));
-            Ok(pool.custom(cmd, all_args).await?)
+            let mut all_args = Vec::new();
+            if let Some(sub) = command.sub_name {
+                all_args.push(sub.into());
+            }
+            all_args.push(key_value);
+            all_args.extend(args_vec);
+            if let Some(conv) = command.convertor {
+                let raw: Value = pool.custom(cmd, all_args).await?;
+                conv.convert(raw)
+            } else {
+                Ok(pool.custom(cmd, all_args).await?)
+            }
         }
     }
 
-    fn write_async<T: FromValue + Send + 'static>(
+    fn write_async<T, K, V>(
         &self,
-        key: &str,
+        key: K,
         command: RedisCommand<T>,
-        args: Vec<&str>,
-    ) -> impl Future<Output = Result<T>> + Send + 'static {
+        args: V,
+    ) -> impl Future<Output = Result<T>> + Send + 'static
+    where
+        T: FromValue + Send + 'static,
+        K: Into<MultipleKeys> + Send,
+        V: TryInto<MultipleValues> + Send,
+        V::Error: Into<Error> + Send,
+    {
         let pool = self.connection_manager.pool.clone();
-        let key = key.to_string();
-        let args: Vec<String> = args.into_iter().map(|s| s.to_string()).collect();
+        let key_value = key.into().into_values().into_iter().next().unwrap_or(Value::Null);
+        let args_result = args.try_into().map_err(|e| anyhow::anyhow!("{:?}", e.into()));
         async move {
+            let args_vec = args_result?.into_array();
             let cmd = CustomCommand::new_static(command.name, ClusterHash::FirstKey, false);
-            let mut all_args: Vec<&str> = vec![key.as_str()];
-            all_args.extend(args.iter().map(|s| s.as_str()));
-            Ok(pool.custom(cmd, all_args).await?)
+            let mut all_args = Vec::new();
+            if let Some(sub) = command.sub_name {
+                all_args.push(sub.into());
+            }
+            all_args.push(key_value);
+            all_args.extend(args_vec);
+            if let Some(conv) = command.convertor {
+                let raw: Value = pool.custom(cmd, all_args).await?;
+                conv.convert(raw)
+            } else {
+                Ok(pool.custom(cmd, all_args).await?)
+            }
         }
     }
 
-    fn eval_write_async<T: FromValue + Send + 'static>(
+    fn eval_write_async<T, K, V>(
         &self,
         script: &str,
-        keys: Vec<&str>,
-        args: Vec<&str>,
-    ) -> impl Future<Output = Result<T>> + Send + 'static {
+        keys: K,
+        args: V,
+    ) -> impl Future<Output = Result<T>> + Send + 'static
+    where
+        T: FromValue + Send + 'static,
+        K: Into<MultipleKeys> + Send,
+        V: TryInto<MultipleValues> + Send,
+        V::Error: Into<Error> + Send,
+    {
         let pool = self.connection_manager.pool.clone();
         let script = script.to_string();
-        let keys: Vec<String> = keys.into_iter().map(|s| s.to_string()).collect();
-        let args: Vec<String> = args.into_iter().map(|s| s.to_string()).collect();
+        let keys: Vec<String> = keys.into().inner().into_iter().map(|k| k.as_str_lossy().into_owned()).collect();
+        let args_result = args.try_into().map_err(|e| anyhow::anyhow!("{:?}", e.into()));
         async move {
+            let args_vec = args_result?.into_array();
             let key_refs: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
-            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            Ok(pool.eval(script, key_refs, arg_refs).await?)
+            Ok(pool.eval(script, key_refs, args_vec).await?)
         }
     }
 
-    fn eval_read_async<T: FromValue + Send + 'static>(
+    fn eval_read_async<T, K, V>(
         &self,
         script: &str,
-        keys: Vec<&str>,
-        args: Vec<&str>,
-    ) -> impl Future<Output = Result<T>> + Send + 'static {
+        keys: K,
+        args: V,
+    ) -> impl Future<Output = Result<T>> + Send + 'static
+    where
+        T: FromValue + Send + 'static,
+        K: Into<MultipleKeys> + Send,
+        V: TryInto<MultipleValues> + Send,
+        V::Error: Into<Error> + Send,
+    {
         let pool = self.connection_manager.pool.clone();
         let script = script.to_string();
-        let keys: Vec<String> = keys.into_iter().map(|s| s.to_string()).collect();
-        let args: Vec<String> = args.into_iter().map(|s| s.to_string()).collect();
+        let keys: Vec<String> = keys.into().inner().into_iter().map(|k| k.as_str_lossy().into_owned()).collect();
+        let args_result = args.try_into().map_err(|e| anyhow::anyhow!("{:?}", e.into()));
         async move {
+            let args_vec = args_result?.into_array();
             let key_refs: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
-            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            Ok(pool.eval(script, key_refs, arg_refs).await?)
+            Ok(pool.eval(script, key_refs, args_vec).await?)
         }
     }
 }

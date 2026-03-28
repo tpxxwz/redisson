@@ -20,7 +20,10 @@ pub struct BatchHandle<T> {
 
 impl<T: FromValue + Send> BatchHandle<T> {
     pub(crate) fn new(rx: oneshot::Receiver<Result<Value>>) -> Self {
-        Self { rx, _marker: PhantomData }
+        Self {
+            rx,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -31,7 +34,9 @@ impl<T: FromValue + Send> Future for BatchHandle<T> {
         match Pin::new(&mut self.rx).poll(cx) {
             Poll::Ready(Ok(Ok(value))) => Poll::Ready(T::from_value(value).map_err(Into::into)),
             Poll::Ready(Ok(Err(e))) => Poll::Ready(Err(e)),
-            Poll::Ready(Err(_)) => Poll::Ready(Err(anyhow!("batch command dropped before execute()"))),
+            Poll::Ready(Err(_)) => {
+                Poll::Ready(Err(anyhow!("batch command dropped before execute()")))
+            }
             Poll::Pending => Poll::Pending,
         }
     }

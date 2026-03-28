@@ -78,7 +78,10 @@ impl RedissonClient for Arc<Redisson> {
 pub async fn init(config: RedissonConfig) -> Result<Arc<Redisson>> {
     let id = uuid::Uuid::new_v4().to_string();
     tracing::info!("Redisson id: {}", id);
-    tracing::info!("Redis lock watchdog timeout: {}s", config.lock_watchdog_timeout);
+    tracing::info!(
+        "Redis lock watchdog timeout: {}s",
+        config.lock_watchdog_timeout
+    );
 
     // 1. 创建 ConnectionManager（ServiceManager 此时无 scheduler）
     let connection_manager = FredConnectionManager::init(&config, id).await?;
@@ -91,7 +94,9 @@ pub async fn init(config: RedissonConfig) -> Result<Arc<Redisson>> {
         command_executor.clone(),
         config.lock_watchdog_timeout * 1000,
     ));
-    connection_manager.service_manager().register(renewal_scheduler);
+    connection_manager
+        .service_manager()
+        .register(renewal_scheduler);
     tracing::info!("Lock renewal scheduler registered");
 
     Ok(Arc::new(Redisson {

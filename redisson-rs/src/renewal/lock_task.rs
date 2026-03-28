@@ -76,11 +76,14 @@ impl<CE: CommandAsyncExecutor> LockTask<CE> {
 
         let ttl_str = internal_lock_lease_time.to_string();
         let keys: Vec<&str> = snapshot.iter().map(|(k, _)| k.as_str()).collect();
-        let mut argv: Vec<&str> = Vec::with_capacity(snapshot.len() + 1);
-        argv.push(ttl_str.as_str());
-        argv.extend(snapshot.iter().map(|(_, o)| o.as_str()));
+        let mut argv: Vec<Value> = Vec::with_capacity(snapshot.len() + 1);
+        argv.push(Value::from(ttl_str.clone()));
+        argv.extend(snapshot.iter().map(|(_, o)| Value::from(o.clone())));
 
-        match executor.eval_write_async::<Value>(RENEW_SCRIPT, keys, argv).await {
+        match executor
+            .eval_write_async::<Value, _, _>(RENEW_SCRIPT, keys, argv)
+            .await
+        {
             Ok(raw) => {
                 use fred::types::FromValue;
                 let results = Vec::<i64>::from_value(raw).unwrap_or_default();

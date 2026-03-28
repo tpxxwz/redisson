@@ -1,4 +1,5 @@
 use crate::config::equal_jitter_delay::{DelayStrategy, EqualJitterDelay};
+use crate::config::name_mapper::NameMapper;
 use crate::renewal::renewal_scheduler_trait::RenewalScheduler;
 use std::sync::{Arc, OnceLock};
 
@@ -10,21 +11,23 @@ pub struct ServiceManager {
     /// 节点唯一标识（UUID），对应 Java ServiceManager.id
     pub(crate) id: String,
     /// watchdog 续约调度器，对应 Java ServiceManager.renewalScheduler
-    /// 通过 register() 后置注入，对应 Java ServiceManager.register(LockRenewalScheduler)
     renewal_scheduler: OnceLock<Arc<dyn RenewalScheduler>>,
-    /// Pub/Sub 订阅建立超时（ms），对应 Java ServiceManager.getSubscribeTimeout()
+    /// 对应 Java ServiceManager.getNameMapper()
+    pub(crate) name_mapper: Arc<dyn NameMapper>,
+    /// Pub/Sub 订阅建立超时（ms）
     pub(crate) subscribe_timeout_ms: u64,
     /// 对应 Java BaseConfig.timeout（命令响应超时，ms）
     pub(crate) command_timeout_ms: u64,
     /// 对应 Java BaseConfig.retryAttempts
     pub(crate) retry_attempts: u32,
-    /// 对应 Java BaseConfig.retryDelay（DelayStrategy 实现类）
+    /// 对应 Java BaseConfig.retryDelay
     pub(crate) retry_delay: EqualJitterDelay,
 }
 
 impl ServiceManager {
     pub fn new(
         id: String,
+        name_mapper: Arc<dyn NameMapper>,
         subscribe_timeout_ms: u64,
         command_timeout_ms: u64,
         retry_attempts: u32,
@@ -33,6 +36,7 @@ impl ServiceManager {
         Self {
             id,
             renewal_scheduler: OnceLock::new(),
+            name_mapper,
             subscribe_timeout_ms,
             command_timeout_ms,
             retry_attempts,

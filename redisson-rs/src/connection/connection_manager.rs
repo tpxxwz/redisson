@@ -21,4 +21,8 @@ pub trait ConnectionManager: Send + Sync {
     /// 对应 Java ConnectionManager.shutdown()
     /// 停止 watchdog 续约，向所有连接发送 QUIT 命令
     async fn shutdown(&self);
+
+    /// 对应 Java ConnectionManager.calcSlot(String key)
+    /// 计算 key 的 cluster hash slot（0-16383）
+    fn calc_slot(&self, key: &str) -> u16;
 }

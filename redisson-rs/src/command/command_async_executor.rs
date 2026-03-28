@@ -1,8 +1,9 @@
-use crate::command::redis_command::RedisCommand;
+use crate::client::protocol::redis_command::RedisCommand;
 use crate::connection::connection_manager::ConnectionManager;
 use crate::connection::service_manager::ServiceManager;
 use anyhow::Result;
-use fred::types::FromValue;
+use fred::error::Error;
+use fred::types::{FromValue, MultipleKeys, MultipleValues};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -14,31 +15,51 @@ pub trait CommandAsyncExecutor: Send + Sync + 'static {
     fn connection_manager(&self) -> Arc<dyn ConnectionManager>;
     fn service_manager(&self) -> &Arc<ServiceManager>;
 
-    fn read_async<T: FromValue + Send + 'static>(
+    fn read_async<T, K, V>(
         &self,
-        key: &str,
+        key: K,
         command: RedisCommand<T>,
-        args: Vec<&str>,
-    ) -> impl Future<Output = Result<T>> + Send + 'static;
+        args: V,
+    ) -> impl Future<Output = Result<T>> + Send + 'static
+    where
+        T: FromValue + Send + 'static,
+        K: Into<MultipleKeys> + Send,
+        V: TryInto<MultipleValues> + Send,
+        V::Error: Into<Error> + Send;
 
-    fn write_async<T: FromValue + Send + 'static>(
+    fn write_async<T, K, V>(
         &self,
-        key: &str,
+        key: K,
         command: RedisCommand<T>,
-        args: Vec<&str>,
-    ) -> impl Future<Output = Result<T>> + Send + 'static;
+        args: V,
+    ) -> impl Future<Output = Result<T>> + Send + 'static
+    where
+        T: FromValue + Send + 'static,
+        K: Into<MultipleKeys> + Send,
+        V: TryInto<MultipleValues> + Send,
+        V::Error: Into<Error> + Send;
 
-    fn eval_write_async<T: FromValue + Send + 'static>(
+    fn eval_write_async<T, K, V>(
         &self,
         script: &str,
-        keys: Vec<&str>,
-        args: Vec<&str>,
-    ) -> impl Future<Output = Result<T>> + Send + 'static;
+        keys: K,
+        args: V,
+    ) -> impl Future<Output = Result<T>> + Send + 'static
+    where
+        T: FromValue + Send + 'static,
+        K: Into<MultipleKeys> + Send,
+        V: TryInto<MultipleValues> + Send,
+        V::Error: Into<Error> + Send;
 
-    fn eval_read_async<T: FromValue + Send + 'static>(
+    fn eval_read_async<T, K, V>(
         &self,
         script: &str,
-        keys: Vec<&str>,
-        args: Vec<&str>,
-    ) -> impl Future<Output = Result<T>> + Send + 'static;
+        keys: K,
+        args: V,
+    ) -> impl Future<Output = Result<T>> + Send + 'static
+    where
+        T: FromValue + Send + 'static,
+        K: Into<MultipleKeys> + Send,
+        V: TryInto<MultipleValues> + Send,
+        V::Error: Into<Error> + Send;
 }

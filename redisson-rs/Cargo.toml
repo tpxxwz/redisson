@@ -27,3 +27,4 @@ uuid = { version = "1.22.0", features = ["v4"] }
 rand = "0.8"
 dashmap = "6.1.0"
 async-trait = "0.1"
+bytes = "1.9"

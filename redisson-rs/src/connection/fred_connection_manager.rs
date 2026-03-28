@@ -2,7 +2,9 @@ use super::connection_manager::ConnectionManager;
 use super::service_manager::ServiceManager;
 use crate::config::server_mode::ServerMode;
 use crate::config::sharded_subscription_mode::ShardedSubscriptionMode;
-use crate::config::{RedissonConfig, build_connection_config, build_fred_config, build_perf_config};
+use crate::config::{
+    RedissonConfig, build_connection_config, build_fred_config, build_perf_config,
+};
 use crate::pubsub::lock_pub_sub::LockPubSub;
 use crate::pubsub::publish_subscribe_service::PublishSubscribeService;
 use anyhow::{Context, Result};
@@ -64,7 +66,10 @@ impl FredConnectionManager {
             Some(build_connection_config(config)),
             Some(reconnect_policy),
         );
-        subscriber.init().await.context("Failed to connect subscriber")?;
+        subscriber
+            .init()
+            .await
+            .context("Failed to connect subscriber")?;
 
         let subscriber_clone = subscriber.clone();
         tokio::spawn(async move {
@@ -81,6 +86,7 @@ impl FredConnectionManager {
 
         let service_manager = Arc::new(ServiceManager::new(
             id,
+            config.name_mapper.clone(),
             config.subscription_timeout,
             config.command_timeout_ms,
             config.retry_attempts,
@@ -154,5 +160,9 @@ impl ConnectionManager for FredConnectionManager {
     async fn shutdown(&self) {
         self.service_manager.renewal_scheduler().shutdown();
         let _ = self.pool.quit().await;
+    }
+
+    fn calc_slot(&self, key: &str) -> u16 {
+        fred::util::redis_keyslot(key.as_bytes())
     }
 }

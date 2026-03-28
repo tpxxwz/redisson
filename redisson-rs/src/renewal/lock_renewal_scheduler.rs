@@ -29,9 +29,8 @@ impl<CE: CommandAsyncExecutor> LockRenewalScheduler<CE> {
 
     /// 惰性获取或创建 LockTask，对应 Java 的 compareAndSet(null, new LockTask(...))
     fn task(&self) -> &LockTask<CE> {
-        self.reference.get_or_init(|| {
-            LockTask::new(self.executor.clone(), self.internal_lock_lease_time)
-        })
+        self.reference
+            .get_or_init(|| LockTask::new(self.executor.clone(), self.internal_lock_lease_time))
     }
 }
 

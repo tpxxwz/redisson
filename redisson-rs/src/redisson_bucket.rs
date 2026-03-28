@@ -1,6 +1,7 @@
+use fred::types::Value;
 use crate::api::rbucket::RBucket;
 use crate::command::command_async_executor::CommandAsyncExecutor;
-use crate::command::redis_command::commands;
+use crate::client::protocol::redis_commands as commands;
 use crate::ext::RedisKey;
 use anyhow::Result;
 use std::sync::Arc;
@@ -34,21 +35,22 @@ impl<CE: CommandAsyncExecutor> RBucket for RedissonBucket<CE> {
     /// 对应 Java RBucketAsync.getAsync() — GET key
     async fn get(&self) -> Result<Option<String>> {
         self.command_executor
-            .read_async(&self.name, commands::GET, vec![])
+            .read_async(&self.name, commands::GET, Vec::<Value>::new())
             .await
     }
 
     /// 对应 Java RBucketAsync.setAsync(value) — SET key value
     async fn set(&self, value: &str) -> Result<()> {
         self.command_executor
-            .write_async(&self.name, commands::SET, vec![value])
+            .write_async(&self.name, commands::SET, vec![Value::from(value)])
             .await
     }
 
     /// 对应 Java RObjectAsync.deleteAsync() — DEL key
     async fn delete(&self) -> Result<bool> {
-        let count: i64 = self.command_executor
-            .write_async(&self.name, commands::DEL, vec![])
+        let count: i64 = self
+            .command_executor
+            .write_async(&self.name, commands::DEL, Vec::<Value>::new())
             .await?;
         Ok(count > 0)
     }
@@ -56,7 +58,7 @@ impl<CE: CommandAsyncExecutor> RBucket for RedissonBucket<CE> {
     /// 对应 Java RBucketAsync.sizeAsync() — STRLEN key
     async fn size(&self) -> Result<i64> {
         self.command_executor
-            .read_async(&self.name, commands::STRLEN, vec![])
+            .read_async(&self.name, commands::STRLEN, Vec::<Value>::new())
             .await
     }
 }

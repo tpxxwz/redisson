@@ -1,6 +1,9 @@
 pub mod equal_jitter_delay;
+pub mod name_mapper;
 pub mod server_mode;
 pub mod sharded_subscription_mode;
+
+pub use name_mapper::NameMapper;
 
 use crate::config::equal_jitter_delay::EqualJitterDelay;
 use crate::config::server_mode::ServerMode;
@@ -9,6 +12,7 @@ use anyhow::Result;
 use fred::prelude::*;
 use fred::types::config::ClusterDiscoveryPolicy;
 use serde::Deserialize;
+use std::sync::Arc;
 use std::time::Duration;
 
 // ============================================================
@@ -112,6 +116,10 @@ impl Default for RedisConfig {
 
 #[derive(Clone)]
 pub struct RedissonConfig {
+    // ── 名称映射 ──
+    /// 对应 Java Config.nameMapper，默认 DefaultNameMapper（直接透传）
+    pub name_mapper: Arc<dyn name_mapper::NameMapper>,
+
     // ── 连接 ──
     pub mode: ServerMode,
     pub host: String,
@@ -155,6 +163,14 @@ pub struct RedissonConfig {
     pub sharded_subscription_mode: ShardedSubscriptionMode,
 }
 
+impl RedissonConfig {
+    /// 对应 Java Config.setNameMapper(NameMapper)
+    pub fn set_name_mapper(&mut self, mapper: Arc<dyn name_mapper::NameMapper>) -> &mut Self {
+        self.name_mapper = mapper;
+        self
+    }
+}
+
 impl TryFrom<RedisConfig> for RedissonConfig {
     type Error = anyhow::Error;
 
@@ -178,6 +194,7 @@ impl TryFrom<RedisConfig> for RedissonConfig {
             ),
         };
         Ok(Self {
+            name_mapper: name_mapper::direct(),
             mode,
             host: c.host,
             port: c.port,
