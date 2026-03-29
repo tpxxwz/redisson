@@ -139,15 +139,7 @@ impl CommandAsyncExecutor for CommandBatchService {
     {
         let key = key.into().as_str_lossy().into_owned();
         let args: Vec<Value> = args.into_iter().filter_map(|v| v.try_into().ok()).collect();
-        let (tx, rx) = oneshot::channel();
-        self.queue.lock().push(BatchEntry::Command {
-            cmd_name: command.name,
-            key,
-            args,
-            is_read: true,
-            tx,
-        });
-        BatchHandle::new(rx)
+        self.async_inner(command.name, key, args, true)
     }
 
     fn write_async<T, K, R>(
@@ -164,15 +156,7 @@ impl CommandAsyncExecutor for CommandBatchService {
     {
         let key = key.into().as_str_lossy().into_owned();
         let args: Vec<Value> = args.into_iter().filter_map(|v| v.try_into().ok()).collect();
-        let (tx, rx) = oneshot::channel();
-        self.queue.lock().push(BatchEntry::Command {
-            cmd_name: command.name,
-            key,
-            args,
-            is_read: false,
-            tx,
-        });
-        BatchHandle::new(rx)
+        self.async_inner(command.name, key, args, false)
     }
 
     fn eval_write_async<T, K, MK, R>(
@@ -187,24 +171,10 @@ impl CommandAsyncExecutor for CommandBatchService {
         T: FromValue + Send + 'static,
         K: Into<Key> + Send,
         MK: Into<MultipleKeys> + Send,
-        R: TryInto<MultipleValues> + Send,
+        R: TryInto<MultipleValues> + Send + 'static,
         R::Error: Into<Error> + Send,
     {
-        let cmd_name = command.name;
-        let routing_slot = self.base.connection_manager.calc_slot(key.into().as_bytes());
-        let keys: Vec<String> = keys.into().inner().into_iter().map(|k| k.as_str_lossy().into_owned()).collect();
-        let args = args.try_into().map(|v: Value| v.into_array()).unwrap_or_default();
-        let (tx, rx) = oneshot::channel();
-        self.queue.lock().push(BatchEntry::Eval {
-            script: script.to_string(),
-            cmd_name,
-            routing_slot,
-            keys,
-            args,
-            is_read: false,
-            tx,
-        });
-        BatchHandle::new(rx)
+        self.base.eval_write_async(key, command, script, keys, args)
     }
 
     fn eval_read_async<T, K, MK, R>(
@@ -219,21 +189,34 @@ impl CommandAsyncExecutor for CommandBatchService {
         T: FromValue + Send + 'static,
         K: Into<Key> + Send,
         MK: Into<MultipleKeys> + Send,
-        R: TryInto<MultipleValues> + Send,
+        R: TryInto<MultipleValues> + Send + 'static,
         R::Error: Into<Error> + Send,
     {
-        let cmd_name = command.name;
-        let routing_slot = self.base.connection_manager.calc_slot(key.into().as_bytes());
-        let keys: Vec<String> = keys.into().inner().into_iter().map(|k| k.as_str_lossy().into_owned()).collect();
-        let args = args.try_into().map(|v: Value| v.into_array()).unwrap_or_default();
+        self.base.eval_read_async(key, command, script, keys, args)
+    }
+}
+
+// ============================================================
+// CommandBatchService helper
+// ============================================================
+
+impl CommandBatchService {
+    fn async_inner<T>(
+        &self,
+        cmd_name: &'static str,
+        key: String,
+        args: Vec<Value>,
+        is_read: bool,
+    ) -> BatchHandle<T>
+    where
+        T: FromValue + Send + 'static,
+    {
         let (tx, rx) = oneshot::channel();
-        self.queue.lock().push(BatchEntry::Eval {
-            script: script.to_string(),
+        self.queue.lock().push(BatchEntry::Command {
             cmd_name,
-            routing_slot,
-            keys,
+            key,
             args,
-            is_read: true,
+            is_read,
             tx,
         });
         BatchHandle::new(rx)
