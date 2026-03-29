@@ -98,7 +98,9 @@ impl<CE: CommandAsyncExecutor> RedissonLock<CE> {
         let lock_name = self.generate_lock_name(thread_id);
         let name = self.get_raw_name();
         self.command_executor
-            .eval_write_async::<Option<u64>, _, _>(
+            .eval_write_async::<Option<u64>, _, _, _>(
+                name.as_str(),
+                crate::client::protocol::redis_command::RedisCommand::new("EVAL"),
                 script,
                 vec![name.as_str()],
                 vec![Value::from(lease_time.to_string()), Value::from(lock_name)],
@@ -276,6 +278,8 @@ impl<CE: CommandAsyncExecutor> LockInner for RedissonLock<CE> {
         let result: Option<i64> = self
             .command_executor
             .eval_write_async(
+                lock_key.as_str(),
+                crate::client::protocol::redis_command::RedisCommand::new("EVAL"),
                 script,
                 vec![
                     lock_key.as_str(),
@@ -298,7 +302,7 @@ impl<CE: CommandAsyncExecutor> LockInner for RedissonLock<CE> {
             let latch_key_owned = latch_key.clone();
             tokio::spawn(async move {
                 let _ = executor
-                    .write_async::<i64, _, _>(&latch_key_owned, commands::DEL, Vec::<Value>::new())
+                    .write_async::<i64, _, _>(&latch_key_owned, commands::DEL, vec![Value::from(latch_key_owned.clone())])
                     .await;
             });
         }
@@ -327,6 +331,8 @@ impl<CE: CommandAsyncExecutor> LockInner for RedissonLock<CE> {
         let raw: Value = self
             .command_executor
             .eval_write_async(
+                lock_key.as_str(),
+                commands::EVAL_OBJECT,
                 script,
                 vec![lock_key.as_str(), channel_key.as_str()],
                 vec![Value::from("0"), Value::from(publish_cmd)],
@@ -367,7 +373,7 @@ impl<CE: CommandAsyncExecutor> RLockBase<CE> for RedissonLock<CE> {
     }
 
     fn lock_id(&self) -> &str {
-        &self.id
+        &self.base.id
     }
 
     fn entry_name(&self) -> &str {

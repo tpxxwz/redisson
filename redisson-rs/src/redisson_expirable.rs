@@ -188,7 +188,7 @@ impl<CE: CommandAsyncExecutor> RExpirableAsync for RedissonExpirable<CE> {
             let name = self.base.name.read().clone();
             self.base
                 .command_executor
-                .write_async(&name, commands::PEXPIRE, vec![Value::from(millis.to_string())])
+                .write_async(&name, commands::PEXPIRE, vec![Value::from(name.clone()), Value::from(millis.to_string())])
                 .await
         }
     }
@@ -198,7 +198,7 @@ impl<CE: CommandAsyncExecutor> RExpirableAsync for RedissonExpirable<CE> {
             let name = self.base.name.read().clone();
             self.base
                 .command_executor
-                .write_async(&name, commands::PEXPIREAT, vec![Value::from(timestamp_millis.to_string())])
+                .write_async(&name, commands::PEXPIREAT, vec![Value::from(name.clone()), Value::from(timestamp_millis.to_string())])
                 .await
         }
     }
@@ -209,7 +209,7 @@ impl<CE: CommandAsyncExecutor> RExpirableAsync for RedissonExpirable<CE> {
             let name = self.base.name.read().clone();
             self.base
                 .command_executor
-                .write_async(&name, commands::PEXPIRE, vec![Value::from(millis.to_string()), Value::from("XX")])
+                .write_async(&name, commands::PEXPIRE, vec![Value::from(name.clone()), Value::from(millis.to_string()), Value::from("XX")])
                 .await
         }
     }
@@ -220,7 +220,7 @@ impl<CE: CommandAsyncExecutor> RExpirableAsync for RedissonExpirable<CE> {
             let name = self.base.name.read().clone();
             self.base
                 .command_executor
-                .write_async(&name, commands::PEXPIRE, vec![Value::from(millis.to_string()), Value::from("NX")])
+                .write_async(&name, commands::PEXPIRE, vec![Value::from(name.clone()), Value::from(millis.to_string()), Value::from("NX")])
                 .await
         }
     }
@@ -231,7 +231,7 @@ impl<CE: CommandAsyncExecutor> RExpirableAsync for RedissonExpirable<CE> {
             let name = self.base.name.read().clone();
             self.base
                 .command_executor
-                .write_async(&name, commands::PEXPIRE, vec![Value::from(millis.to_string()), Value::from("GT")])
+                .write_async(&name, commands::PEXPIRE, vec![Value::from(name.clone()), Value::from(millis.to_string()), Value::from("GT")])
                 .await
         }
     }
@@ -242,7 +242,7 @@ impl<CE: CommandAsyncExecutor> RExpirableAsync for RedissonExpirable<CE> {
             let name = self.base.name.read().clone();
             self.base
                 .command_executor
-                .write_async(&name, commands::PEXPIRE, vec![Value::from(millis.to_string()), Value::from("LT")])
+                .write_async(&name, commands::PEXPIRE, vec![Value::from(name.clone()), Value::from(millis.to_string()), Value::from("LT")])
                 .await
         }
     }
@@ -252,7 +252,7 @@ impl<CE: CommandAsyncExecutor> RExpirableAsync for RedissonExpirable<CE> {
             let name = self.base.name.read().clone();
             self.base
                 .command_executor
-                .write_async(&name, commands::PERSIST, Vec::<Value>::new())
+                .write_async(&name, commands::PERSIST, vec![Value::from(name.clone())])
                 .await
         }
     }
@@ -262,7 +262,7 @@ impl<CE: CommandAsyncExecutor> RExpirableAsync for RedissonExpirable<CE> {
             let name = self.base.name.read().clone();
             self.base
                 .command_executor
-                .read_async(&name, commands::PTTL, Vec::<Value>::new())
+                .read_async(&name, commands::PTTL, vec![Value::from(name.clone())])
                 .await
         }
     }
@@ -272,7 +272,7 @@ impl<CE: CommandAsyncExecutor> RExpirableAsync for RedissonExpirable<CE> {
             let name = self.base.name.read().clone();
             self.base
                 .command_executor
-                .read_async(&name, commands::PEXPIRETIME, Vec::<Value>::new())
+                .read_async(&name, commands::PEXPIRETIME, vec![Value::from(name.clone())])
                 .await
         }
     }

@@ -29,12 +29,21 @@ pub struct FredConnectionManager {
     pub(crate) subscribe_service: Arc<PublishSubscribeService>,
     /// 服务管理器，对应 Java serviceManager
     pub(crate) service_manager: Arc<ServiceManager>,
+    /// 对应 Java ServiceManager.cfg (Config)
+    pub(crate) config: Arc<RedissonConfig>,
+    /// 是否从 replica 读取（仅 cluster + read_from_slave=true 时为 true）
+    pub(crate) use_replica_for_reads: bool,
 }
+
+/// 所有字段均为 Arc<...> + Send + Sync，故 FredConnectionManager 也满足 Send + Sync。
+/// 这使得 &CommandAsyncService 能在 async move 中安全捕获，满足 trait impl 返回 impl Future + Send + 'static 的约束。
+unsafe impl Send for FredConnectionManager {}
+unsafe impl Sync for FredConnectionManager {}
 
 impl FredConnectionManager {
     /// 对应 Java MasterSlaveConnectionManager(MasterSlaveServersConfig, Config, UUID id)：
     /// 内部完成连接池、订阅客户端、PublishSubscribeService、ServiceManager 的初始化。
-    pub async fn init(config: &RedissonConfig, id: String) -> Result<Arc<Self>> {
+    pub async fn init(config: &RedissonConfig) -> Result<Arc<Self>> {
         let reconnect_policy = ReconnectPolicy::new_exponential(
             config.reconnect_max_attempts,
             config.reconnect_min_delay_ms,
@@ -85,8 +94,8 @@ impl FredConnectionManager {
         tracing::info!("PublishSubscribeService initialized");
 
         let service_manager = Arc::new(ServiceManager::new(
-            id,
             config.name_mapper.clone(),
+            Arc::new(config.clone()),
             config.subscription_timeout,
             config.command_timeout_ms,
             config.retry_attempts,
@@ -96,10 +105,16 @@ impl FredConnectionManager {
         let lock_pub_sub = LockPubSub::new(subscribe_service.clone());
         tokio::spawn(Self::pubsub_message_listener(subscriber, lock_pub_sub));
 
+        let use_replica_for_reads = matches!(config.mode, ServerMode::Cluster { .. })
+            && config.read_from_slave;
+        let config = Arc::new(config.clone());
+
         Ok(Arc::new(Self {
             pool,
             subscribe_service,
             service_manager,
+            config,
+            use_replica_for_reads,
         }))
     }
 
@@ -113,7 +128,7 @@ impl FredConnectionManager {
 
     /// 对应 Java ClusterConnectionManager.checkShardingSupport()
     async fn check_sharding_support(pool: &Pool, config: &RedissonConfig) -> &'static str {
-        if !matches!(config.mode, ServerMode::Cluster) {
+        if !matches!(config.mode, ServerMode::Cluster { .. }) {
             return "publish";
         }
         match config.sharded_subscription_mode {
@@ -145,6 +160,7 @@ impl FredConnectionManager {
             lock_pub_sub.on_message(channel, msg_value);
         }
     }
+
 }
 
 #[async_trait]
@@ -162,7 +178,22 @@ impl ConnectionManager for FredConnectionManager {
         let _ = self.pool.quit().await;
     }
 
-    fn calc_slot(&self, key: &str) -> u16 {
-        fred::util::redis_keyslot(key.as_bytes())
+    fn config(&self) -> &Arc<RedissonConfig> {
+        &self.config
+    }
+
+    /// 对应 Java ConnectionManager.calcSlot(String/ByteBuf/byte[] key)
+    ///
+    /// 注意：Java 中 ClusterConnectionManager 自行实现 CRC16 + hash tag 提取，
+    /// MasterSlaveConnectionManager 直接返回 singleSlotRange.getStartSlot()（固定值 0），
+    /// 两者行为通过多态区分。
+    ///
+    /// Rust 这边统一委托给 fred::util::redis_keyslot（redis-protocol crate 的标准实现，
+    /// 逻辑与 ClusterConnectionManager 完全一致）。MasterSlave 的固定 slot 分支不需要，
+    /// 原因：① fred Pool 内部屏蔽了 Cluster/MasterSlave 的节点路由差异，calc_slot 不再
+    /// 参与路由决策；② 唯一调用方（rename 跨 slot 检查）已被 is_cluster_config() 前置
+    /// 守卫，非 cluster 模式下此方法根本不会执行。
+    fn calc_slot(&self, key: &[u8]) -> u16 {
+        fred::util::redis_keyslot(key)
     }
 }

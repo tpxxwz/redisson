@@ -16,7 +16,7 @@ tokio = { version = "1.50.0", features = ["full"] }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 
 # Redis
-fred = { version = "10.1.0", features = ["sentinel-auth", "i-scripts", "i-pubsub", "subscriber-client"] }
+fred = { version = "10.1.0", features = ["sentinel-auth", "i-scripts", "i-pubsub", "subscriber-client", "replicas", "sha-1"] }
 
 # Observability（库只 emit，不负责 subscriber 的注册）
 tracing = "0.1.44"

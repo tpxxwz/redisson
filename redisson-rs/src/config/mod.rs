@@ -6,7 +6,7 @@ pub mod sharded_subscription_mode;
 pub use name_mapper::NameMapper;
 
 use crate::config::equal_jitter_delay::EqualJitterDelay;
-use crate::config::server_mode::ServerMode;
+pub(crate) use crate::config::server_mode::ServerMode;
 use crate::config::sharded_subscription_mode::ShardedSubscriptionMode;
 use anyhow::Result;
 use fred::prelude::*;
@@ -75,6 +75,14 @@ pub struct RedisConfig {
     // ── Pub/Sub ──
     /// "auto" | "on" | "off"
     pub sharded_subscription_mode: String,
+
+    // ── 读策略 ──
+    /// 是否从 slave 读取（仅 cluster 模式生效），默认 false
+    pub read_from_slave: bool,
+
+    // ── Script 缓存 ──
+    /// 是否启用 EVALSHA 脚本缓存（对应 Java isUseScriptCache），默认 true
+    pub use_script_cache: bool,
 }
 
 impl Default for RedisConfig {
@@ -106,6 +114,8 @@ impl Default for RedisConfig {
             retry_delay_base_ms: 1_000,
             retry_delay_max_ms: 2_000,
             sharded_subscription_mode: "auto".to_string(),
+            read_from_slave: false,
+            use_script_cache: true,
         }
     }
 }
@@ -120,19 +130,12 @@ pub struct RedissonConfig {
     /// 对应 Java Config.nameMapper，默认 DefaultNameMapper（直接透传）
     pub name_mapper: Arc<dyn name_mapper::NameMapper>,
 
-    // ── 连接 ──
+    // ── 连接（拓扑及各模式专属字段已内聚到 ServerMode 变体中）──
     pub mode: ServerMode,
-    pub host: String,
-    pub port: u16,
-    pub nodes: Vec<RedisNode>,
-    pub sentinel_service_name: String,
-    pub sentinel_username: String,
-    pub sentinel_password: String,
 
-    // ── 认证 ──
+    // ── 认证（连 Redis 本身，三种模式共用）──
     pub username: String,
     pub password: String,
-    pub db: u8,
 
     // ── 连接池 ──
     pub pool_size: usize,
@@ -161,6 +164,13 @@ pub struct RedissonConfig {
 
     // ── Pub/Sub ──
     pub sharded_subscription_mode: ShardedSubscriptionMode,
+
+    // ── 读策略 ──
+    pub read_from_slave: bool,
+
+    // ── Script 缓存 ──
+    /// 对应 Java isUseScriptCache，是否启用 EVALSHA 脚本缓存
+    pub use_script_cache: bool,
 }
 
 impl RedissonConfig {
@@ -176,13 +186,25 @@ impl TryFrom<RedisConfig> for RedissonConfig {
 
     fn try_from(c: RedisConfig) -> Result<Self> {
         let mode = match c.mode.to_lowercase().as_str() {
-            "standalone" => ServerMode::Standalone,
-            "cluster" => ServerMode::Cluster,
-            "sentinel" => ServerMode::Sentinel,
-            other => anyhow::bail!(
-                "Invalid mode '{}'. Expected: standalone, cluster, sentinel",
-                other
-            ),
+            "standalone" => ServerMode::Standalone {
+                server: RedisNode { host: c.host.clone(), port: c.port },
+                db: c.db,
+            },
+            "cluster" => {
+                anyhow::ensure!(!c.nodes.is_empty(), "Cluster mode requires at least one node in 'nodes'");
+                ServerMode::Cluster { nodes: c.nodes.clone() }
+            }
+            "sentinel" => {
+                anyhow::ensure!(!c.nodes.is_empty(), "Sentinel mode requires at least one node in 'nodes'");
+                ServerMode::Sentinel {
+                    sentinels: c.nodes.clone(),
+                    service_name: c.sentinel_service_name.clone(),
+                    username: if c.sentinel_username.is_empty() { None } else { Some(c.sentinel_username.clone()) },
+                    password: if c.sentinel_password.is_empty() { None } else { Some(c.sentinel_password.clone()) },
+                    db: c.db,
+                }
+            }
+            other => anyhow::bail!("Invalid mode '{}'. Expected: standalone, cluster, sentinel", other),
         };
         let sharded_subscription_mode = match c.sharded_subscription_mode.to_lowercase().as_str() {
             "auto" => ShardedSubscriptionMode::Auto,
@@ -196,15 +218,8 @@ impl TryFrom<RedisConfig> for RedissonConfig {
         Ok(Self {
             name_mapper: name_mapper::direct(),
             mode,
-            host: c.host,
-            port: c.port,
-            nodes: c.nodes,
-            sentinel_service_name: c.sentinel_service_name,
-            sentinel_username: c.sentinel_username,
-            sentinel_password: c.sentinel_password,
             username: c.username,
             password: c.password,
-            db: c.db,
             pool_size: c.pool_size,
             connect_timeout_secs: c.connect_timeout_secs,
             command_timeout_secs: c.command_timeout_secs,
@@ -220,6 +235,8 @@ impl TryFrom<RedisConfig> for RedissonConfig {
             retry_attempts: c.retry_attempts,
             retry_delay: EqualJitterDelay::new(c.retry_delay_base_ms, c.retry_delay_max_ms),
             sharded_subscription_mode,
+            read_from_slave: c.read_from_slave,
+            use_script_cache: c.use_script_cache,
         })
     }
 }
@@ -229,68 +246,33 @@ impl TryFrom<RedisConfig> for RedissonConfig {
 // ============================================================
 
 pub(crate) fn build_fred_config(config: &RedissonConfig) -> Result<Config> {
-    let server = match &config.mode {
-        ServerMode::Standalone => ServerConfig::Centralized {
-            server: Server::new(&config.host, config.port),
-        },
-        ServerMode::Cluster => {
-            let hosts: Vec<Server> = config
-                .nodes
-                .iter()
-                .map(|n| Server::new(&n.host, n.port))
-                .collect();
-            anyhow::ensure!(
-                !hosts.is_empty(),
-                "Cluster mode requires at least one node in 'nodes'"
-            );
+    let (server, database) = match &config.mode {
+        ServerMode::Standalone { server: node, db } => (
+            ServerConfig::Centralized { server: Server::new(&node.host, node.port) },
+            Some(*db),
+        ),
+        ServerMode::Cluster { nodes } => (
             ServerConfig::Clustered {
-                hosts,
+                hosts: nodes.iter().map(|n| Server::new(&n.host, n.port)).collect(),
                 policy: ClusterDiscoveryPolicy::default(),
-            }
-        }
-        ServerMode::Sentinel => {
-            let hosts: Vec<Server> = config
-                .nodes
-                .iter()
-                .map(|n| Server::new(&n.host, n.port))
-                .collect();
-            anyhow::ensure!(
-                !hosts.is_empty(),
-                "Sentinel mode requires at least one node in 'nodes'"
-            );
+            },
+            None,
+        ),
+        ServerMode::Sentinel { sentinels, service_name, username, password, db } => (
             ServerConfig::Sentinel {
-                hosts,
-                service_name: config.sentinel_service_name.clone(),
-                username: if config.sentinel_username.is_empty() {
-                    None
-                } else {
-                    Some(config.sentinel_username.clone())
-                },
-                password: if config.sentinel_password.is_empty() {
-                    None
-                } else {
-                    Some(config.sentinel_password.clone())
-                },
-            }
-        }
+                hosts: sentinels.iter().map(|n| Server::new(&n.host, n.port)).collect(),
+                service_name: service_name.clone(),
+                username: username.clone(),
+                password: password.clone(),
+            },
+            Some(*db),
+        ),
     };
-
     Ok(Config {
         server,
-        username: if config.username.is_empty() {
-            None
-        } else {
-            Some(config.username.clone())
-        },
-        password: if config.password.is_empty() {
-            None
-        } else {
-            Some(config.password.clone())
-        },
-        database: match config.mode {
-            ServerMode::Cluster => None,
-            _ => Some(config.db),
-        },
+        username: if config.username.is_empty() { None } else { Some(config.username.clone()) },
+        password: if config.password.is_empty() { None } else { Some(config.password.clone()) },
+        database,
         ..Default::default()
     })
 }

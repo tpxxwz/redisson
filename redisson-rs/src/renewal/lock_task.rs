@@ -76,12 +76,13 @@ impl<CE: CommandAsyncExecutor> LockTask<CE> {
 
         let ttl_str = internal_lock_lease_time.to_string();
         let keys: Vec<&str> = snapshot.iter().map(|(k, _)| k.as_str()).collect();
+        let routing_key = keys.first().copied().unwrap_or_default();
         let mut argv: Vec<Value> = Vec::with_capacity(snapshot.len() + 1);
         argv.push(Value::from(ttl_str.clone()));
         argv.extend(snapshot.iter().map(|(_, o)| Value::from(o.clone())));
 
         match executor
-            .eval_write_async::<Value, _, _>(RENEW_SCRIPT, keys, argv)
+            .eval_write_async(routing_key, crate::client::protocol::redis_commands::EVAL_OBJECT, RENEW_SCRIPT, keys, argv)
             .await
         {
             Ok(raw) => {

@@ -7,8 +7,7 @@ use crate::connection::service_manager::ServiceManager;
 use anyhow::{Result, anyhow};
 use fred::error::Error;
 use fred::interfaces::ClientLike;
-use fred::prelude::Value;
-use fred::types::{ClusterHash, CustomCommand, FromValue, MultipleKeys, MultipleValues};
+use fred::types::{ClusterHash, CustomCommand, FromValue, Key, MultipleKeys, MultipleValues, Value};
 use parking_lot::Mutex;
 use std::future::Future;
 use std::sync::Arc;
@@ -23,12 +22,16 @@ enum BatchEntry {
         cmd_name: &'static str,
         key: String,
         args: Vec<Value>,
+        is_read: bool,
         tx: oneshot::Sender<Result<Value>>,
     },
     Eval {
+        cmd_name: &'static str,
         script: String,
+        routing_slot: u16,
         keys: Vec<String>,
         args: Vec<Value>,
+        is_read: bool,
         tx: oneshot::Sender<Result<Value>>,
     },
 }
@@ -58,36 +61,40 @@ impl CommandBatchService {
             return Ok(());
         }
 
-        let client = self.base.pool().next();
-        let pipeline = client.pipeline();
+        let all_reads = entries.iter().all(|e| match e {
+            BatchEntry::Command { is_read, .. } => *is_read,
+            BatchEntry::Eval { is_read, .. } => *is_read,
+        });
+        let use_replica = self.base.connection_manager.use_replica_for_reads && all_reads;
 
-        for entry in &entries {
-            match entry {
-                BatchEntry::Command {
-                    cmd_name,
-                    key,
-                    args,
-                    ..
-                } => {
-                    let cmd = CustomCommand::new_static(cmd_name, ClusterHash::FirstKey, false);
-                    let mut all_args: Vec<Value> = vec![key.clone().into()];
-                    all_args.extend(args.iter().cloned());
-                    let _: Value = pipeline.custom(cmd, all_args).await?;
+        macro_rules! run_pipeline {
+            ($pipeline:expr) => {{
+                for entry in &entries {
+                    match entry {
+                        BatchEntry::Command { cmd_name, key, args, .. } => {
+                            let slot = ClusterHash::Custom(self.base.connection_manager.calc_slot(key.as_bytes()));
+                            let cmd = CustomCommand::new_static(cmd_name, slot, false);
+                            let _: Value = $pipeline.custom(cmd, args.clone()).await?;
+                        }
+                        BatchEntry::Eval { cmd_name, script, routing_slot, keys, args, .. } => {
+                            let cmd = CustomCommand::new_static(cmd_name, ClusterHash::Custom(*routing_slot), false);
+                            let numkeys = keys.len().to_string();
+                            let mut all_args: Vec<Value> = vec![script.clone().into(), numkeys.into()];
+                            all_args.extend(keys.iter().cloned().map(|k| k.into()));
+                            all_args.extend(args.iter().cloned());
+                            let _: Value = $pipeline.custom(cmd, all_args).await?;
+                        }
+                    }
                 }
-                BatchEntry::Eval {
-                    script, keys, args, ..
-                } => {
-                    let cmd = CustomCommand::new_static("EVAL", ClusterHash::Random, false);
-                    let numkeys = keys.len().to_string();
-                    let mut all_args: Vec<Value> = vec![script.clone().into(), numkeys.into()];
-                    all_args.extend(keys.iter().cloned().map(|k| k.into()));
-                    all_args.extend(args.iter().cloned());
-                    let _: Value = pipeline.custom(cmd, all_args).await?;
-                }
-            }
+                $pipeline.try_all::<Value>().await
+            }};
         }
 
-        let results = pipeline.try_all::<Value>().await;
+        let results = if use_replica {
+            run_pipeline!(self.base.pool().replicas().pipeline())
+        } else {
+            run_pipeline!(self.base.pool().next().pipeline())
+        };
 
         for (entry, result) in entries.into_iter().zip(results.into_iter()) {
             let tx = match entry {
@@ -114,97 +121,119 @@ impl CommandAsyncExecutor for CommandBatchService {
         self.base.service_manager()
     }
 
-    fn read_async<T, K, V>(
+    fn is_batch(&self) -> bool {
+        true
+    }
+
+    fn read_async<T, K, R>(
         &self,
         key: K,
         command: RedisCommand<T>,
-        args: V,
+        args: Vec<R>,
     ) -> impl Future<Output = Result<T>> + Send + 'static
     where
         T: FromValue + Send + 'static,
-        K: Into<MultipleKeys> + Send,
-        V: TryInto<MultipleValues> + Send,
-        V::Error: Into<Error> + Send,
+        K: Into<Key> + Send,
+        R: TryInto<Value> + Send + 'static,
+        R::Error: Into<Error> + Send,
     {
-        let key = key.into().into_values().into_iter().next().unwrap_or(Value::Null).as_str().unwrap_or_default().to_string();
-        let args = args.try_into().map(|v: Value| v.into_array()).unwrap_or_default();
+        let key = key.into().as_str_lossy().into_owned();
+        let args: Vec<Value> = args.into_iter().filter_map(|v| v.try_into().ok()).collect();
         let (tx, rx) = oneshot::channel();
         self.queue.lock().push(BatchEntry::Command {
             cmd_name: command.name,
             key,
             args,
+            is_read: true,
             tx,
         });
         BatchHandle::new(rx)
     }
 
-    fn write_async<T, K, V>(
+    fn write_async<T, K, R>(
         &self,
         key: K,
         command: RedisCommand<T>,
-        args: V,
+        args: Vec<R>,
     ) -> impl Future<Output = Result<T>> + Send + 'static
     where
         T: FromValue + Send + 'static,
-        K: Into<MultipleKeys> + Send,
-        V: TryInto<MultipleValues> + Send,
-        V::Error: Into<Error> + Send,
+        K: Into<Key> + Send,
+        R: TryInto<Value> + Send + 'static,
+        R::Error: Into<Error> + Send,
     {
-        let key = key.into().into_values().into_iter().next().unwrap_or(Value::Null).as_str().unwrap_or_default().to_string();
-        let args = args.try_into().map(|v: Value| v.into_array()).unwrap_or_default();
+        let key = key.into().as_str_lossy().into_owned();
+        let args: Vec<Value> = args.into_iter().filter_map(|v| v.try_into().ok()).collect();
         let (tx, rx) = oneshot::channel();
         self.queue.lock().push(BatchEntry::Command {
             cmd_name: command.name,
             key,
             args,
+            is_read: false,
             tx,
         });
         BatchHandle::new(rx)
     }
 
-    fn eval_write_async<T, K, V>(
+    fn eval_write_async<T, K, MK, R>(
         &self,
+        key: K,
+        command: RedisCommand<T>,
         script: &str,
-        keys: K,
-        args: V,
+        keys: MK,
+        args: R,
     ) -> impl Future<Output = Result<T>> + Send + 'static
     where
         T: FromValue + Send + 'static,
-        K: Into<MultipleKeys> + Send,
-        V: TryInto<MultipleValues> + Send,
-        V::Error: Into<Error> + Send,
+        K: Into<Key> + Send,
+        MK: Into<MultipleKeys> + Send,
+        R: TryInto<MultipleValues> + Send,
+        R::Error: Into<Error> + Send,
     {
+        let cmd_name = command.name;
+        let routing_slot = self.base.connection_manager.calc_slot(key.into().as_bytes());
         let keys: Vec<String> = keys.into().inner().into_iter().map(|k| k.as_str_lossy().into_owned()).collect();
         let args = args.try_into().map(|v: Value| v.into_array()).unwrap_or_default();
         let (tx, rx) = oneshot::channel();
         self.queue.lock().push(BatchEntry::Eval {
             script: script.to_string(),
+            cmd_name,
+            routing_slot,
             keys,
             args,
+            is_read: false,
             tx,
         });
         BatchHandle::new(rx)
     }
 
-    fn eval_read_async<T, K, V>(
+    fn eval_read_async<T, K, MK, R>(
         &self,
+        key: K,
+        command: RedisCommand<T>,
         script: &str,
-        keys: K,
-        args: V,
+        keys: MK,
+        args: R,
     ) -> impl Future<Output = Result<T>> + Send + 'static
     where
         T: FromValue + Send + 'static,
-        K: Into<MultipleKeys> + Send,
-        V: TryInto<MultipleValues> + Send,
-        V::Error: Into<Error> + Send,
+        K: Into<Key> + Send,
+        MK: Into<MultipleKeys> + Send,
+        R: TryInto<MultipleValues> + Send,
+        R::Error: Into<Error> + Send,
     {
+        let cmd_name = command.name;
+        let routing_slot = self.base.connection_manager.calc_slot(key.into().as_bytes());
         let keys: Vec<String> = keys.into().inner().into_iter().map(|k| k.as_str_lossy().into_owned()).collect();
         let args = args.try_into().map(|v: Value| v.into_array()).unwrap_or_default();
         let (tx, rx) = oneshot::channel();
         self.queue.lock().push(BatchEntry::Eval {
             script: script.to_string(),
+            cmd_name,
+            routing_slot,
             keys,
             args,
+            is_read: true,
             tx,
         });
         BatchHandle::new(rx)

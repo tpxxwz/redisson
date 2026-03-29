@@ -76,15 +76,13 @@ impl RedissonClient for Arc<Redisson> {
 // ============================================================
 
 pub async fn init(config: RedissonConfig) -> Result<Arc<Redisson>> {
-    let id = uuid::Uuid::new_v4().to_string();
-    tracing::info!("Redisson id: {}", id);
     tracing::info!(
         "Redis lock watchdog timeout: {}s",
         config.lock_watchdog_timeout
     );
 
     // 1. 创建 ConnectionManager（ServiceManager 此时无 scheduler）
-    let connection_manager = FredConnectionManager::init(&config, id).await?;
+    let connection_manager = FredConnectionManager::init(&config).await?;
 
     // 2. 创建 executor
     let command_executor = Arc::new(CommandAsyncService::new(connection_manager.clone()));

@@ -1,5 +1,7 @@
 use crate::config::equal_jitter_delay::{DelayStrategy, EqualJitterDelay};
 use crate::config::name_mapper::NameMapper;
+use crate::config::RedissonConfig;
+use crate::config::ServerMode;
 use crate::renewal::renewal_scheduler_trait::RenewalScheduler;
 use std::sync::{Arc, OnceLock};
 
@@ -14,6 +16,8 @@ pub struct ServiceManager {
     renewal_scheduler: OnceLock<Arc<dyn RenewalScheduler>>,
     /// 对应 Java ServiceManager.getNameMapper()
     pub(crate) name_mapper: Arc<dyn NameMapper>,
+    /// 对应 Java ServiceManager.cfg (Config)
+    cfg: Arc<RedissonConfig>,
     /// Pub/Sub 订阅建立超时（ms）
     pub(crate) subscribe_timeout_ms: u64,
     /// 对应 Java BaseConfig.timeout（命令响应超时，ms）
@@ -26,17 +30,18 @@ pub struct ServiceManager {
 
 impl ServiceManager {
     pub fn new(
-        id: String,
         name_mapper: Arc<dyn NameMapper>,
+        config: Arc<RedissonConfig>,
         subscribe_timeout_ms: u64,
         command_timeout_ms: u64,
         retry_attempts: u32,
         retry_delay: EqualJitterDelay,
     ) -> Self {
         Self {
-            id,
+            id: uuid::Uuid::new_v4().to_string(),
             renewal_scheduler: OnceLock::new(),
             name_mapper,
+            cfg: config,
             subscribe_timeout_ms,
             command_timeout_ms,
             retry_attempts,
@@ -63,9 +68,19 @@ impl ServiceManager {
         self.subscribe_timeout_ms
     }
 
+    /// 对应 Java ServiceManager.getCfg()
+    pub fn cfg(&self) -> &RedissonConfig {
+        &self.cfg
+    }
+
     pub fn calc_unlock_latch_timeout_ms(&self) -> u64 {
         let delay = self.retry_delay.calc_delay(self.retry_attempts);
         let timeout = (self.command_timeout_ms + delay) * self.retry_attempts as u64;
         timeout.max(1)
+    }
+
+    /// 对应 Java Config.isClusterConfig()
+    pub fn is_cluster_config(&self) -> bool {
+        matches!(self.cfg.mode, ServerMode::Cluster { .. })
     }
 }

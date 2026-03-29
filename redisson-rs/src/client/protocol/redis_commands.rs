@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use fred::prelude::Value;
 use super::convertor::{
     BooleanAmountReplayConvertor, BooleanNotNullReplayConvertor,
     BooleanNullSafeReplayConvertor, BooleanReplayConvertor,
@@ -107,3 +108,18 @@ pub const NOT_EXISTS: RedisCommand<bool> =
 /// 对应 Java RedisCommands.UNLINK_BOOL (BooleanNullSafeReplayConvertor)
 pub const UNLINK_BOOL: RedisCommand<bool> =
     RedisCommand::new_with_convertor("UNLINK", &BooleanNullSafeReplayConvertor);
+
+// ── EVAL 系列 ────────────────────────────────────────────────────
+
+/// 对应 Java RedisCommands.EVAL_LONG (Long)
+pub const EVAL_LONG: RedisCommand<i64> = RedisCommand::new("EVAL");
+/// 对应 Java RedisCommands.EVAL_OBJECT (Object / raw Value)
+pub const EVAL_OBJECT: RedisCommand<Value> = RedisCommand::new("EVAL");
+/// 对应 Java RedisCommands.EVAL_BOOLEAN (BooleanReplayConvertor)
+pub const EVAL_BOOLEAN: RedisCommand<bool> =
+    RedisCommand::new_with_convertor("EVAL", &BooleanReplayConvertor);
+/// 对应 Java EVALSHA 变体，命令名为 EVALSHA
+pub const EVALSHA_OBJECT: RedisCommand<Value> = RedisCommand::new("EVALSHA");
+/// SCRIPT LOAD script — 完整的 SCRIPT LOAD 调用
+/// 注意：SCRIPT LOAD 是两个词，args = ["LOAD", script]
+pub const SCRIPT_LOAD: (&'static str, &'static str) = ("SCRIPT", "LOAD");

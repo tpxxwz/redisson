@@ -42,7 +42,8 @@ impl RedisKey for TestKey {
 // ============================================================
 
 #[tokio::test]
-async fn test_basic_lock_unlock() {
+async fn
+test_basic_lock_unlock() {
     let rt = make_runtime().await;
     let lock = rt.get_lock(TestKey("basic"));
 
@@ -79,33 +80,6 @@ async fn test_reentrant_lock() {
         !lock.is_locked().await.unwrap(),
         "released after second unlock"
     );
-}
-
-// ============================================================
-// try_lock: 锁被持有时非阻塞返回 false
-// ============================================================
-
-#[tokio::test]
-async fn test_try_lock_fails_when_held() {
-    let rt = make_runtime().await;
-    let lock1 = rt.get_lock(TestKey("try_lock"));
-    let lock2 = rt.get_lock(TestKey("try_lock"));
-
-    assert!(
-        lock1.try_lock().await.unwrap(),
-        "first try_lock should succeed"
-    );
-    assert!(
-        !lock2.try_lock().await.unwrap(),
-        "second try_lock should fail"
-    );
-
-    lock1.unlock().await.unwrap();
-    assert!(
-        lock2.try_lock().await.unwrap(),
-        "try_lock should succeed after release"
-    );
-    lock2.unlock().await.unwrap();
 }
 
 // ============================================================

@@ -1,8 +1,8 @@
 use super::service_manager::ServiceManager;
+use crate::config::RedissonConfig;
 use crate::pubsub::publish_subscribe_service::PublishSubscribeService;
 use async_trait::async_trait;
 use std::sync::Arc;
-
 // ============================================================
 // ConnectionManager — 对应 Java org.redisson.connection.ConnectionManager（接口）
 // ============================================================
@@ -22,7 +22,11 @@ pub trait ConnectionManager: Send + Sync {
     /// 停止 watchdog 续约，向所有连接发送 QUIT 命令
     async fn shutdown(&self);
 
-    /// 对应 Java ConnectionManager.calcSlot(String key)
+    /// 对应 Java ConnectionManager.calcSlot(String/ByteBuf/byte[] key)
     /// 计算 key 的 cluster hash slot（0-16383）
-    fn calc_slot(&self, key: &str) -> u16;
+    /// &[u8] 统一覆盖 Java 三个重载，调用方 .as_bytes() 即可
+    fn calc_slot(&self, key: &[u8]) -> u16;
+    /// 对应 Java connectionManager.getServiceManager().getCfg()
+    fn config(&self) -> &Arc<RedissonConfig>;
 }
+

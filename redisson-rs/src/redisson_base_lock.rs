@@ -110,7 +110,7 @@ pub trait RLockBase<CE: CommandAsyncExecutor>: LockInner + RExpirable {
         use crate::client::protocol::redis_commands as commands;
         let key = self.lock_name();
         self.command_executor()
-            .read_async(&key, commands::EXISTS, Vec::<Value>::new())
+            .read_async(&key, commands::EXISTS, vec![Value::from(key.clone())])
             .await
     }
 
@@ -123,7 +123,7 @@ pub trait RLockBase<CE: CommandAsyncExecutor>: LockInner + RExpirable {
             .read_async(
                 &key,
                 commands::HEXISTS,
-                vec![Value::from(lock_name)],
+                vec![Value::from(key.clone()), Value::from(lock_name)],
             )
             .await
     }
@@ -138,7 +138,7 @@ pub trait RLockBase<CE: CommandAsyncExecutor>: LockInner + RExpirable {
         use crate::client::protocol::redis_commands as commands;
         let key = self.lock_name();
         self.command_executor()
-            .read_async(&key, commands::PTTL, Vec::<Value>::new())
+            .read_async(&key, commands::PTTL, vec![Value::from(key.clone())])
             .await
     }
 
@@ -154,7 +154,7 @@ pub trait RLockBase<CE: CommandAsyncExecutor>: LockInner + RExpirable {
             end
         ";
         self.command_executor()
-            .eval_write_async(script, vec![key.as_str()], vec![Value::from(lock_name)])
+            .eval_write_async(key.as_str(), crate::client::protocol::redis_commands::EVAL_LONG, script, vec![key.as_str()], vec![Value::from(lock_name)])
             .await
     }
 
