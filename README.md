@@ -1,3 +1,5 @@
+> **[AI 助手]** 本仓库含 Rust 移植项目，开始工作前请先读 [`redisson-rs/README.md`](redisson-rs/README.md)，其中说明了模块范围、文件对照和架构差异。本仓库中的 Java Redisson 版本为 `4.3.0`，对应源码主要在当前仓库根目录及其各个 `redisson-*` 模块目录中；Rust fred 版本为 `10.1.0`，对应源码在仓库的 [`fred`](./fred) 目录下。如果要查看这两个项目的源代码、实现细节或相关信息，不用去 GitHub 网站上找，直接在本地仓库中查看对应文件夹即可。始终用中文回复，禁止使用韩语或其他任何语言。
+
 # Redisson - Valkey & Redis Java client.<br/>Real-Time Data Platform.
 
 [Quick start](https://redisson.org/docs/getting-started/) | [Documentation](https://redisson.org/docs/) | [Changelog](https://github.com/redisson/redisson/blob/master/CHANGELOG.md) | [Code examples](https://github.com/redisson/redisson-examples) | [JavaDocs](https://www.javadoc.io/doc/org.redisson/redisson/latest/index.html)
