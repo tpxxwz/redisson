@@ -44,31 +44,21 @@ import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.FutureListener;
 import io.netty.util.concurrent.GenericFutureListener;
 import io.netty.util.internal.PlatformDependent;
-import org.redisson.ElementsSubscribeService;
-import org.redisson.QueueTransferService;
-import org.redisson.RedissonClientSideCaching;
 import org.redisson.RedissonShutdownException;
 import org.redisson.api.*;
 import org.redisson.cache.LRUCacheMap;
 import org.redisson.client.RedisNodeNotFoundException;
 import org.redisson.client.codec.Codec;
-import org.redisson.client.protocol.RedisCommand;
-import org.redisson.client.protocol.RedisCommands;
 import org.redisson.command.NoSyncedSlavesException;
 import org.redisson.config.*;
-import org.redisson.liveobject.resolver.MapResolver;
 import org.redisson.misc.CompletableFutureWrapper;
 import org.redisson.misc.FastRemovalQueue;
 import org.redisson.misc.RandomXoshiro256PlusPlus;
 import org.redisson.misc.RedisURI;
-import org.redisson.remote.ResponseEntry;
 import org.redisson.renewal.LockRenewalScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
@@ -142,17 +132,9 @@ public final class ServiceManager {
 
     private final AtomicBoolean shutdownLatch = new AtomicBoolean();
 
-    private final ElementsSubscribeService elementsSubscribeService = new ElementsSubscribeService(this);
-
     private NatMapper natMapper = NatMapper.direct();
 
-    private static final Map<InetSocketAddress, Set<String>> SCRIPT_SHA_CACHE = new ConcurrentHashMap<>();
-
     private static final Map<String, String> SHA_CACHE = new LRUCacheMap<>(500, 0, 0);
-
-    private final Map<String, ResponseEntry> responses = new ConcurrentHashMap<>();
-
-    private final QueueTransferService queueTransferService = new QueueTransferService();
 
     private LockRenewalScheduler renewalScheduler;
 
@@ -264,8 +246,9 @@ public final class ServiceManager {
 
             @Override
             public void onDisconnect(InetSocketAddress addr) {
-                SCRIPT_SHA_CACHE.remove(addr);
+
             }
+
         });
 
         initTimer();
@@ -464,10 +447,6 @@ public final class ServiceManager {
         return config.getCommandMapper();
     }
 
-    public ElementsSubscribeService getElementsSubscribeService() {
-        return elementsSubscribeService;
-    }
-
     public CompletableFuture<RedisURI> resolveIP(RedisURI address) {
         return resolveIP(address.getScheme(), address);
     }
@@ -556,23 +535,6 @@ public final class ServiceManager {
         this.natMapper = natMapper;
     }
 
-    public NatMapper getNatMapper() {
-        return natMapper;
-    }
-
-    public boolean isCached(InetSocketAddress addr, String script) {
-        Set<String> values = SCRIPT_SHA_CACHE.computeIfAbsent(addr, k -> Collections.newSetFromMap(new ConcurrentHashMap<>()));
-        String sha = calcSHA(script);
-        return values.contains(sha);
-    }
-
-    public void cacheScripts(InetSocketAddress addr, Set<String> scripts) {
-        Set<String> values = SCRIPT_SHA_CACHE.computeIfAbsent(addr, k -> Collections.newSetFromMap(new ConcurrentHashMap<>()));
-        for (String script : scripts) {
-            values.add(calcSHA(script));
-        }
-    }
-
     public String calcSHA(String script) {
         return SHA_CACHE.computeIfAbsent(script, k -> {
             try {
@@ -632,22 +594,7 @@ public final class ServiceManager {
         });
     }
 
-    public <V> void transferException(CompletionStage<V> source, CompletableFuture<V> dest) {
-        source.exceptionally(ex -> {
-            dest.completeExceptionally(ex);
-            return null;
-        });
-    }
-
     private final Random random = RandomXoshiro256PlusPlus.create();
-
-    public Random getRandom() {
-        return random;
-    }
-
-    public Long generateValue() {
-        return random.nextLong();
-    }
 
     public String generateId() {
         return ByteBufUtil.hexDump(generateIdArray());
@@ -663,55 +610,6 @@ public final class ServiceManager {
         return id;
     }
 
-    private final AtomicBoolean liveObjectLatch = new AtomicBoolean();
-
-    public AtomicBoolean getLiveObjectLatch() {
-        return liveObjectLatch;
-    }
-
-    public boolean isResp3() {
-        return cfg.getProtocol() == Protocol.RESP3;
-    }
-
-    private static final Map<RedisCommand<?>, RedisCommand<?>> RESP3MAPPING = new HashMap<>();
-
-    static {
-        RESP3MAPPING.put(RedisCommands.XREADGROUP_BLOCKING, RedisCommands.XREADGROUP_BLOCKING_V2);
-        RESP3MAPPING.put(RedisCommands.XREADGROUP, RedisCommands.XREADGROUP_V2);
-        RESP3MAPPING.put(RedisCommands.XREADGROUP_BLOCKING_SINGLE, RedisCommands.XREADGROUP_BLOCKING_SINGLE_V2);
-        RESP3MAPPING.put(RedisCommands.XREADGROUP_SINGLE, RedisCommands.XREADGROUP_SINGLE_V2);
-        RESP3MAPPING.put(RedisCommands.XREAD_BLOCKING_SINGLE, RedisCommands.XREAD_BLOCKING_SINGLE_V2);
-        RESP3MAPPING.put(RedisCommands.XREAD_SINGLE, RedisCommands.XREAD_SINGLE_V2);
-        RESP3MAPPING.put(RedisCommands.XREAD_BLOCKING, RedisCommands.XREAD_BLOCKING_V2);
-        RESP3MAPPING.put(RedisCommands.XREAD, RedisCommands.XREAD_V2);
-        RESP3MAPPING.put(RedisCommands.HRANDFIELD, RedisCommands.HRANDFIELD_V2);
-      
-        RESP3MAPPING.put(RedisCommands.VSIM_WITHSCORESATTRIBS, RedisCommands.VSIM_WITHSCORESATTRIBS_V2);
-        RESP3MAPPING.put(RedisCommands.ZRANGE_SINGLE_ENTRY, RedisCommands.ZRANGE_SINGLE_ENTRY_V2);
-        RESP3MAPPING.put(RedisCommands.ZRANGE_ENTRY, RedisCommands.ZRANGE_ENTRY_V2);
-        RESP3MAPPING.put(RedisCommands.ZREVRANGE_ENTRY, RedisCommands.ZREVRANGE_ENTRY_V2);
-        RESP3MAPPING.put(RedisCommands.ZRANGEBYSCORE_ENTRY, RedisCommands.ZRANGEBYSCORE_ENTRY_V2);
-        RESP3MAPPING.put(RedisCommands.ZREVRANGEBYSCORE_ENTRY, RedisCommands.ZREVRANGEBYSCORE_ENTRY_V2);
-        RESP3MAPPING.put(RedisCommands.ZINITER_ENTRY, RedisCommands.ZINITER_ENTRY_V2);
-        RESP3MAPPING.put(RedisCommands.ZUNION_ENTRY, RedisCommands.ZUNION_ENTRY_V2);
-        RESP3MAPPING.put(RedisCommands.ZDIFF_ENTRY, RedisCommands.ZDIFF_ENTRY_V2);
-    }
-
-    public <R> RedisCommand<R> resp3(RedisCommand<R> command) {
-        if (isResp3()) {
-            return (RedisCommand<R>) RESP3MAPPING.getOrDefault(command, command);
-        }
-        return command;
-    }
-
-    public Map<String, ResponseEntry> getResponses() {
-        return responses;
-    }
-
-    public QueueTransferService getQueueTransferService() {
-        return queueTransferService;
-    }
-
     public Codec getCodec(Codec codec) {
         if (codec == null) {
             return cfg.getCodec();
@@ -719,60 +617,12 @@ public final class ServiceManager {
         return codec;
     }
 
-    private final Map<String, AdderEntry> addersUsage = new ConcurrentHashMap<>();
-
-    public Map<String, AdderEntry> getAddersUsage() {
-        return addersUsage;
-    }
-
-    private final Map<String, AtomicInteger> addersCounter = new ConcurrentHashMap<>();
-
-    public Map<String, AtomicInteger> getAddersCounter() {
-        return addersCounter;
-    }
-
-    private final MapResolver mapResolver = new MapResolver(this);
-
-    public MapResolver getLiveObjectMapResolver() {
-        return mapResolver;
-    }
-
-    public static final RLock DUMMY_LOCK = (RLock) Proxy.newProxyInstance(ServiceManager.class.getClassLoader(), new Class[] {RLock.class}, new InvocationHandler() {
-        @Override
-        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-            if (method.getName().endsWith("lockAsync")) {
-                return new CompletableFutureWrapper<>((Void) null);
-            }
-            return null;
-        }
-    });
-
     public void register(LockRenewalScheduler renewalScheduler) {
         this.renewalScheduler = renewalScheduler;
     }
 
     public LockRenewalScheduler getRenewalScheduler() {
         return renewalScheduler;
-    }
-
-    private final Set<RedissonClientSideCaching> cachingInstances = Collections.newSetFromMap(new ConcurrentHashMap<>());
-
-    public void addClientSideCaching(RedissonClientSideCaching cachingInstance) {
-        cachingInstances.add(cachingInstance);
-    }
-
-    public void removeClientSideCaching(RedissonClientSideCaching cachingInstance) {
-        cachingInstances.remove(cachingInstance);
-    }
-
-    public boolean hasCachingInstances() {
-        return !cachingInstances.isEmpty();
-    }
-
-    public void evictClientSideCaching(String name) {
-        for (RedissonClientSideCaching cachingInstance : cachingInstances) {
-            cachingInstance.clearCache(name);
-        }
     }
 
     private boolean clusterDetected;

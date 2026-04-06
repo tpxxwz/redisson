@@ -103,10 +103,6 @@ public class CommandData<T, R> implements QueueCommand {
         }
         return Collections.emptyList();
     }
-    
-    public boolean isBlockingCommand() {
-        return command.isBlockingCommand();
-    }
 
     @Override
     public boolean isExecuted() {

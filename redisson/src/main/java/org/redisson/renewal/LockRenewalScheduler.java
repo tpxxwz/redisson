@@ -28,8 +28,6 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class LockRenewalScheduler {
 
     private final AtomicReference<LockTask> reference = new AtomicReference<>();
-    private final AtomicReference<FastMultilockTask> multilockReference = new AtomicReference<>();
-    private final AtomicReference<ReadLockTask> readLockReference = new AtomicReference<>();
     private final CommandAsyncExecutor executor;
 
     private final int batchSize;
@@ -40,37 +38,10 @@ public final class LockRenewalScheduler {
         this.internalLockLeaseTime = executor.getServiceManager().getCfg().getLockWatchdogTimeout();
         this.batchSize = executor.getServiceManager().getCfg().getLockWatchdogBatchSize();
     }
-
-    public void renewReadLock(String name, Long threadId, String lockName, String keyPrefix) {
-        readLockReference.compareAndSet(null, new ReadLockTask(internalLockLeaseTime, executor, batchSize));
-        ReadLockTask task = readLockReference.get();
-        task.add(name, lockName, threadId, keyPrefix);
-    }
-
-    public void renewFastMultiLock(String name, Long threadId, String lockName, Collection<String> fields) {
-        multilockReference.compareAndSet(null, new FastMultilockTask(internalLockLeaseTime, executor));
-        FastMultilockTask task = multilockReference.get();
-        task.add(name, lockName, threadId, fields);
-    }
-
     public void renewLock(String name, Long threadId, String lockName) {
         reference.compareAndSet(null, new LockTask(internalLockLeaseTime, executor, batchSize));
         LockTask task = reference.get();
         task.add(name, lockName, threadId);
-    }
-
-    public void cancelReadLockRenewal(String name, Long threadId) {
-        ReadLockTask rtask = readLockReference.get();
-        if (rtask != null) {
-            rtask.cancelExpirationRenewal(name, threadId);
-        }
-    }
-
-    public void cancelFastMultilockRenewl(String name, Long threadId) {
-        FastMultilockTask mtask = multilockReference.get();
-        if (mtask != null) {
-            mtask.cancelExpirationRenewal(name, threadId);
-        }
     }
 
     public void cancelLockRenewal(String name, Long threadId) {

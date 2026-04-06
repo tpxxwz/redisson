@@ -25,12 +25,9 @@ import org.redisson.client.protocol.RedisCommands;
 import org.redisson.client.protocol.convertor.IntegerReplayConvertor;
 import org.redisson.client.protocol.decoder.MapValueDecoder;
 import org.redisson.command.CommandAsyncExecutor;
-import org.redisson.command.CommandBatchService;
 import org.redisson.config.MasterSlaveServersConfig;
 import org.redisson.misc.CompletableFutureWrapper;
 import org.redisson.renewal.LockRenewalScheduler;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -46,8 +43,6 @@ import java.util.concurrent.locks.Condition;
  * @author Nikita Koksharov
  */
 public abstract class RedissonBaseLock extends RedissonExpirable implements RLock {
-
-    private static final Logger log = LoggerFactory.getLogger(RedissonBaseLock.class);
 
     final String id;
     final String entryName;
@@ -225,14 +220,7 @@ public abstract class RedissonBaseLock extends RedissonExpirable implements RLoc
         RFuture<Boolean> r = unlockInnerAsync(threadId, requestId, (int) timeout);
         String id = requestId;
         CompletionStage<Boolean> ff = r.thenApply(v -> {
-            CommandAsyncExecutor ce = commandExecutor;
-            if (ce instanceof CommandBatchService) {
-                ce = new CommandBatchService(commandExecutor);
-            }
-            ce.writeAsync(getRawName(), LongCodec.INSTANCE, RedisCommands.DEL, getUnlockLatchName(id));
-            if (ce instanceof CommandBatchService) {
-                ((CommandBatchService) ce).executeAsync();
-            }
+            commandExecutor.writeAsync(getRawName(), LongCodec.INSTANCE, RedisCommands.DEL, getUnlockLatchName(id));
             return v;
         });
         return new CompletableFutureWrapper<>(ff);
@@ -272,11 +260,6 @@ public abstract class RedissonBaseLock extends RedissonExpirable implements RLoc
 
     protected final <T> CompletionStage<T> handleNoSync(long threadId, CompletionStage<T> ttlRemainingFuture) {
         return commandExecutor.handleNoSync(ttlRemainingFuture, e -> unlockInnerAsync(threadId, null));
-    }
-
-    @Override
-    public RFuture<Boolean> copyAsync(List<Object> keys, int database, boolean replace) {
-        throw new UnsupportedOperationException();
     }
 
 }

@@ -121,11 +121,6 @@ public class RedisCommand<R> {
                 || RedisCommands.NO_RETRY_COMMANDS.contains(this);
     }
 
-    public boolean isBlockingCommand() {
-        return RedisCommands.BLOCKING_COMMAND_NAMES.contains(getName())
-                || RedisCommands.BLOCKING_COMMANDS.contains(this);
-    }
-
     public String toString() {
         StringBuilder str = new StringBuilder();
         str.append("(").append(name);

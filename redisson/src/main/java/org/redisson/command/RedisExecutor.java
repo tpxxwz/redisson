@@ -23,7 +23,6 @@ import io.netty.util.TimerTask;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.SingleThreadEventExecutor;
 import org.redisson.RedissonShutdownException;
-import org.redisson.ScanResult;
 import org.redisson.api.NodeType;
 import org.redisson.cache.LRUCacheMap;
 import org.redisson.client.*;
@@ -41,7 +40,6 @@ import org.redisson.connection.ConnectionManager;
 import org.redisson.connection.MasterSlaveEntry;
 import org.redisson.connection.NodeSource;
 import org.redisson.connection.NodeSource.Redirect;
-import org.redisson.liveobject.core.RedissonObjectBuilder;
 import org.redisson.misc.LogHelper;
 import org.redisson.misc.RedisURI;
 import org.slf4j.Logger;
@@ -70,9 +68,7 @@ public class RedisExecutor<V, R> {
     final Object[] params;
     final CompletableFuture<R> mainPromise;
     final boolean ignoreRedirect;
-    final RedissonObjectBuilder objectBuilder;
     final ConnectionManager connectionManager;
-    final RedissonObjectBuilder.ReferenceType referenceType;
     final boolean noRetry;
     final int attempts;
     final DelayStrategy retryStrategy;
@@ -93,8 +89,7 @@ public class RedisExecutor<V, R> {
 
     public RedisExecutor(boolean readOnlyMode, NodeSource source, Codec codec, RedisCommand<V> command,
                          Object[] params, CompletableFuture<R> mainPromise, boolean ignoreRedirect,
-                         ConnectionManager connectionManager, RedissonObjectBuilder objectBuilder,
-                         RedissonObjectBuilder.ReferenceType referenceType, boolean noRetry,
+                         ConnectionManager connectionManager, boolean noRetry,
                          int retryAttempts, DelayStrategy retryStrategy, int responseTimeout,
                          boolean trackChanges) {
         super();
@@ -106,13 +101,11 @@ public class RedisExecutor<V, R> {
         this.mainPromise = mainPromise;
         this.ignoreRedirect = ignoreRedirect;
         this.connectionManager = connectionManager;
-        this.objectBuilder = objectBuilder;
         this.noRetry = noRetry;
         this.retryStrategy = retryStrategy;
 
         this.attempts = retryAttempts;
         this.responseTimeout = responseTimeout;
-        this.referenceType = referenceType;
         this.trackChanges = trackChanges;
     }
 
@@ -151,16 +144,6 @@ public class RedisExecutor<V, R> {
                     return;
                 }
 
-                if (command.isBlockingCommand()) {
-                    if (writeFuture.cancel(false)) {
-                        attemptPromise.completeExceptionally(new CancellationException());
-                    } else {
-                        RedisConnection c = connectionFuture.getNow(null);
-                        c.forceFastReconnectAsync().whenComplete((res, ex) -> {
-                            attemptPromise.completeExceptionally(new CancellationException());
-                        });
-                    }
-                }
             };
 
             if (attempt == 0) {
@@ -422,31 +405,6 @@ public class RedisExecutor<V, R> {
         timeout.ifPresent(Timeout::cancel);
 
         long timeoutTime = responseTimeout;
-        if (command != null && command.isBlockingCommand()) {
-            long popTimeout = 0;
-            if (RedisCommands.BLOCKING_COMMANDS.contains(command)) {
-                for (int i = 0; i < params.length-1; i++) {
-                    if ("BLOCK".equals(params[i])) {
-                        popTimeout = Long.valueOf(params[i+1].toString());
-                        break;
-                    }
-                }
-            } else {
-                if (RedisCommands.BZMPOP.getName().equals(command.getName())) {
-                    popTimeout = Long.valueOf(params[0].toString()) * 1000;
-                } else {
-                    popTimeout = Long.valueOf(params[params.length - 1].toString()) * 1000;
-                }
-            }
-
-            handleBlockingOperations(attemptPromise, connection, popTimeout);
-            if (popTimeout == 0) {
-                return;
-            }
-            timeoutTime += popTimeout;
-            // add 1 second due to issue https://github.com/antirez/redis/issues/874
-            timeoutTime += 1000;
-        }
 
         long timeoutAmount = timeoutTime;
         TimerTask timeoutResponseTask = timeout -> {
@@ -485,7 +443,7 @@ public class RedisExecutor<V, R> {
     private boolean isResendAllowed(int attempt, int attempts) {
         return attempt < attempts
                 && !noRetry
-                    && (command == null || (!command.isBlockingCommand() && !command.isNoRetry()));
+                    && (command == null || (!command.isNoRetry()));
     }
 
     private void handleBlockingOperations(CompletableFuture<R> attemptPromise, RedisConnection connection, long popTimeout) {
@@ -497,9 +455,6 @@ public class RedisExecutor<V, R> {
                 if (command.getReplayMultiDecoder() instanceof ObjectListReplayDecoder
                         || command.getReplayMultiDecoder() instanceof ListMultiDecoder2) {
                     res = (R) Collections.emptyList();
-                }
-                if (RedisCommands.XREAD.getName().equals(command.getName())) {
-                    res = (R) Collections.emptyMap();
                 }
                 if (attemptPromise.complete(res)) {
                     connection.forceFastReconnectAsync();
@@ -650,10 +605,6 @@ public class RedisExecutor<V, R> {
             return;
         }
 
-        if (res instanceof ScanResult) {
-            ((ScanResult) res).setRedisClient(getNow(connectionFuture).getRedisClient());
-        }
-
         handleSuccess(mainPromise, connectionFuture, res);
     }
 
@@ -677,11 +628,7 @@ public class RedisExecutor<V, R> {
     }
 
     protected void handleSuccess(CompletableFuture<R> promise, CompletableFuture<RedisConnection> connectionFuture, R res) throws ReflectiveOperationException {
-        if (objectBuilder != null) {
-            promise.complete((R) objectBuilder.tryHandleReference(res, referenceType));
-        } else {
-            promise.complete(res);
-        }
+        promise.complete(res);
         connectionFuture.join().getRedisClient().getConfig().getFailedNodeDetector().onCommandSuccessful();
     }
 
@@ -704,8 +651,7 @@ public class RedisExecutor<V, R> {
             }
             writeFuture = connection.send(new CommandData<>(attemptPromise, codec, command, params));
 
-            if (connectionManager.getServiceManager().getConfig().getMasterConnectionPoolSize() < 10
-                    && !command.isBlockingCommand()) {
+            if (connectionManager.getServiceManager().getConfig().getMasterConnectionPoolSize() < 10) {
                 release(connection);
             }
         }
@@ -725,8 +671,7 @@ public class RedisExecutor<V, R> {
         RedisConnection connection = getNow(connectionFuture);
         if (connectionManager.getServiceManager().getConfig().getMasterConnectionPoolSize() < 10) {
             if (source.getRedirect() == Redirect.ASK
-                    || getClass() != RedisExecutor.class
-                        || (command != null && command.isBlockingCommand())) {
+                    || getClass() != RedisExecutor.class) {
                 release(connection);
             }
         } else {

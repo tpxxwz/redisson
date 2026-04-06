@@ -126,9 +126,6 @@ public abstract class BaseConnectionHandler<C extends RedisConnection> extends C
                 .nextRenewal()
                 .thenCompose(r -> {
                     QueueCommand currentCommand = connection.getCurrentCommandData();
-                    if (currentCommand != null && currentCommand.isBlockingCommand()) {
-                        return connection.forceFastReconnectAsync();
-                    }
                     return authWithCredential();
                 })
                 .thenCompose(r -> startRenewal(ctx, config))

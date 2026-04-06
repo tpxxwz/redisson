@@ -15,12 +15,10 @@
  */
 package org.redisson.connection;
 
-import io.netty.channel.ChannelFuture;
 import org.redisson.api.NodeType;
 import org.redisson.client.RedisClient;
 import org.redisson.client.RedisConnection;
 import org.redisson.client.RedisPubSubConnection;
-import org.redisson.client.protocol.CommandData;
 import org.redisson.config.MasterSlaveServersConfig;
 import org.redisson.misc.WrappedLock;
 import org.slf4j.Logger;
@@ -30,7 +28,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 
@@ -154,81 +151,12 @@ public class ClientConnectionsEntry {
 
         for (RedisConnection connection : connectionsHolder.getAllConnections()) {
             connection.closeAsync();
-            reattachBlockingQueue(connection.getCurrentCommand());
         }
 
         log.debug("{} connections to {} have been closed", connectionsHolder.getAllConnections().size(), client.getAddr());
 
         connectionsHolder.getFreeConnections().clear();
         connectionsHolder.getAllConnections().clear();
-    }
-
-    void reattachBlockingQueue(CommandData<?, ?> commandData) {
-        if (commandData == null
-                || !commandData.isBlockingCommand()
-                || commandData.getPromise().isDone()) {
-            return;
-        }
-
-        String key = getKey(commandData);
-
-        MasterSlaveEntry entry = connectionManager.getEntry(key);
-        if (entry == null) {
-            log.debug("Unable to get entry for {} during blocking command reattach {}", key, commandData);
-            connectionManager.getServiceManager().newTimeout(timeout ->
-                    reattachBlockingQueue(commandData), 1, TimeUnit.SECONDS);
-            return;
-        }
-
-        CompletableFuture<RedisConnection> newConnectionFuture = entry.connectionWriteOp(commandData.getCommand());
-        newConnectionFuture.whenComplete((newConnection, e) -> {
-            if (e != null) {
-                log.debug("Unable to acquire connection during blocking command reattach {}", commandData, e);
-                connectionManager.getServiceManager().newTimeout(timeout ->
-                        reattachBlockingQueue(commandData), 1, TimeUnit.SECONDS);
-                return;
-            }
-
-            commandData.getPromise().whenComplete((r, ex) -> {
-                entry.releaseWrite(newConnection);
-            });
-
-            ChannelFuture channelFuture = newConnection.send(commandData);
-            channelFuture.addListener(future -> {
-                if (!future.isSuccess()) {
-                    log.debug("Unable to send a command during blocking command reattach {}", commandData, future.cause());
-                    connectionManager.getServiceManager().newTimeout(timeout ->
-                            reattachBlockingQueue(commandData), 1, TimeUnit.SECONDS);
-                    return;
-                }
-                log.info("command '{}' has been resent to '{}'", commandData, newConnection.getRedisClient());
-            });
-        });
-    }
-
-    private String getKey(CommandData<?, ?> commandData) {
-        String key = null;
-        for (int i = 0; i < commandData.getParams().length; i++) {
-            Object param = commandData.getParams()[i];
-            if ("STREAMS".equals(param)) {
-                Object k = commandData.getParams()[i+1];
-                if (k instanceof byte[]) {
-                    key = new String((byte[]) k, StandardCharsets.UTF_8);
-                } else {
-                    key = (String) k;
-                }
-                break;
-            }
-        }
-        if (key == null) {
-            Object k = commandData.getParams()[0];
-            if (k instanceof byte[]) {
-                key = new String((byte[]) k, StandardCharsets.UTF_8);
-            } else {
-                key = (String) k;
-            }
-        }
-        return key;
     }
 
     public ConnectionsHolder<RedisConnection> getConnectionsHolder() {

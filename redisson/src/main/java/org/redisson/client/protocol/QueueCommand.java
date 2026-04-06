@@ -30,6 +30,4 @@ public interface QueueCommand {
     
     boolean isExecuted();
 
-    boolean isBlockingCommand();
-    
 }

@@ -16,11 +16,9 @@
 package org.redisson.config;
 
 import io.netty.channel.EventLoopGroup;
-import org.redisson.api.RedissonNodeInitializer;
 import org.redisson.client.FailedNodeDetector;
 import org.redisson.client.NettyHook;
 import org.redisson.client.codec.Codec;
-import org.redisson.codec.ReferenceCodecProvider;
 import org.redisson.connection.AddressResolverGroupFactory;
 import org.redisson.connection.ConnectionListener;
 import org.redisson.connection.balancer.LoadBalancer;
@@ -519,10 +517,8 @@ public class ConfigSupport {
 
     private static class CustomRepresenter extends Representer {
         private final Set<Class<?>> classTypedClasses = new HashSet<>(Arrays.asList(
-                ReferenceCodecProvider.class,
                 AddressResolverGroupFactory.class,
                 Codec.class,
-                RedissonNodeInitializer.class,
                 LoadBalancer.class,
                 NatMapper.class,
                 NameMapper.class,

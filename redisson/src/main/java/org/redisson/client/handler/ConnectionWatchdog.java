@@ -196,31 +196,12 @@ public class ConnectionWatchdog extends ChannelInboundHandlerAdapter {
             connection.clearFastReconnect();
         }
 
-        if (currentCommand instanceof CommandData) {
-            reattachBlockingQueue(connection, (CommandData<?, ?>) currentCommand);
-        }
         reattachPubSub(connection);
 
         if (currentCommand != null
-                && !currentCommand.isBlockingCommand()
-                    && !(connection instanceof RedisPubSubConnection)) {
+                && !(connection instanceof RedisPubSubConnection)) {
             currentCommand.tryFailure(new RedisReconnectedException("Channel has been reconnected"));
         }
-    }
-
-    private void reattachBlockingQueue(RedisConnection connection, CommandData<?, ?> currentCommand) {
-        if (currentCommand == null 
-                || !currentCommand.isBlockingCommand()
-                    || currentCommand.getPromise().isDone()) {
-            return;
-        }
-
-        ChannelFuture future = connection.send(currentCommand);
-        future.addListener((ChannelFutureListener) f -> {
-            if (!f.isSuccess()) {
-                log.error("Can't reconnect blocking queue by command: {} using connection: {}", currentCommand, connection);
-            }
-        });
     }
 
 }

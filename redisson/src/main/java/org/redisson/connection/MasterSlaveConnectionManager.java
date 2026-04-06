@@ -23,7 +23,6 @@ import org.redisson.client.protocol.RedisCommands;
 import org.redisson.cluster.ClusterSlotRange;
 import org.redisson.command.CommandAsyncExecutor;
 import org.redisson.config.*;
-import org.redisson.liveobject.core.RedissonObjectBuilder;
 import org.redisson.misc.RedisURI;
 import org.redisson.pubsub.PublishSubscribeService;
 import org.slf4j.Logger;
@@ -679,7 +678,7 @@ public class MasterSlaveConnectionManager implements ConnectionManager {
     }
 
     @Override
-    public CommandAsyncExecutor createCommandExecutor(RedissonObjectBuilder objectBuilder, RedissonObjectBuilder.ReferenceType referenceType) {
-        return CommandAsyncExecutor.create(this, objectBuilder, referenceType);
+    public CommandAsyncExecutor createCommandExecutor() {
+        return CommandAsyncExecutor.create(this);
     }
 }

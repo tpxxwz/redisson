@@ -20,7 +20,6 @@ import org.redisson.api.NodeType;
 import org.redisson.client.RedisClient;
 import org.redisson.command.CommandAsyncExecutor;
 import org.redisson.config.*;
-import org.redisson.liveobject.core.RedissonObjectBuilder;
 import org.redisson.misc.RedisURI;
 import org.redisson.pubsub.PublishSubscribeService;
 
@@ -73,8 +72,7 @@ public interface ConnectionManager {
     
     ServiceManager getServiceManager();
 
-    CommandAsyncExecutor createCommandExecutor(RedissonObjectBuilder objectBuilder,
-                                               RedissonObjectBuilder.ReferenceType referenceType);
+    CommandAsyncExecutor createCommandExecutor();
 
     static ConnectionManager create(Config configCopy) {
         BaseConfig<?> cfg = ConfigSupport.getConfig(configCopy);

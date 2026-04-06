@@ -117,10 +117,6 @@ public class PublishSubscribeService {
     private final ConcurrentMap<MasterSlaveEntry, PubSubEntry> entry2PubSubConnection = new ConcurrentHashMap<>();
     private final Map<Tuple<ChannelName, ClientConnectionsEntry>, PubSubConnectionEntry> key2connection = new ConcurrentHashMap<>();
 
-    private final SemaphorePubSub semaphorePubSub = new SemaphorePubSub(this);
-
-    private final CountDownLatchPubSub countDownLatchPubSub = new CountDownLatchPubSub(this);
-
     private final LockPubSub lockPubSub = new LockPubSub(this);
 
     private final Set<PubSubConnectionEntry> trackedEntries = Collections.newSetFromMap(new ConcurrentHashMap<>());
@@ -139,14 +135,6 @@ public class PublishSubscribeService {
 
     public LockPubSub getLockPubSub() {
         return lockPubSub;
-    }
-
-    public CountDownLatchPubSub getCountDownLatchPubSub() {
-        return countDownLatchPubSub;
-    }
-
-    public SemaphorePubSub getSemaphorePubSub() {
-        return semaphorePubSub;
     }
 
     public int countListeners(List<ChannelName> channelNames) {

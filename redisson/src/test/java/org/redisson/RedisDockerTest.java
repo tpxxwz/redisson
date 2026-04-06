@@ -18,8 +18,10 @@ import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.lifecycle.Startable;
 import org.testcontainers.utility.DockerImageName;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.time.Duration;
 import java.util.*;
 import java.util.function.BiConsumer;
@@ -140,9 +142,26 @@ public class RedisDockerTest {
 
     @BeforeEach
     public void beforeEach() {
-        redisson.getKeys().flushall();
-        if (redissonCluster != null) {
-            redissonCluster.getKeys().flushall();
+        try {
+            // 你要执行的命令
+            String cmd = "docker exec redis redis-cli -a wzzst310 FLUSHDB";
+            ProcessBuilder pb = new ProcessBuilder("/bin/zsh", "-c", cmd);
+            pb.redirectErrorStream(true); // 合并错误输出
+            Process process = pb.start();
+            // 读取命令输出
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    System.out.println(line);
+                }
+            }
+
+            int exit = process.waitFor();
+            System.out.println("Exit code: " + exit);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -352,7 +371,8 @@ public class RedisDockerTest {
                 .withStartupTimeout(Duration.ofSeconds(30));
     }
 
-    record ClusterData(Startable container, RedissonClient redisson, List<ContainerState> nodes) {}
+    record ClusterData(Startable container, RedissonClient redisson, List<ContainerState> nodes) {
+    }
 
     private static ClusterData createCluster() {
         DockerComposeContainer environment =

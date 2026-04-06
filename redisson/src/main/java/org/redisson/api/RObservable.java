@@ -23,21 +23,4 @@ package org.redisson.api;
  */
 public interface RObservable {
 
-    /**
-     * Adds object event listener
-     *
-     * @see org.redisson.api.ExpiredObjectListener
-     * @see org.redisson.api.DeletedObjectListener
-     *
-     * @param listener - object event listener
-     * @return listener id
-     */
-    int addListener(ObjectListener listener);
-
-    /**
-     * Removes object event listener
-     *
-     * @param listenerId - listener id
-     */
-    void removeListener(int listenerId);
 }

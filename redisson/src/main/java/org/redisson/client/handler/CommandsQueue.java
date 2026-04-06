@@ -52,9 +52,6 @@ public class CommandsQueue extends ChannelDuplexHandler {
         Iterator<QueueCommandHolder> iterator = queue.iterator();
         while (iterator.hasNext()) {
             QueueCommandHolder command = iterator.next();
-            if (command.getCommand().isBlockingCommand()) {
-                continue;
-            }
 
             iterator.remove();
             command.getChannelPromise().tryFailure(
